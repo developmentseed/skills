@@ -1,0 +1,26 @@
+{
+  "name": "skills",
+  "owner": {
+    "name": "Development Seed",
+    "email": "info@developmentseed.org"
+  },
+  "metadata": {
+    "description": "Shared AI Skills by Development Seed"
+  },
+  "plugins": [
+    {
+      "name": "github-issue-to-markdown",
+      "source": "./skills/github-issue-to-markdown",
+      "description": "Exports GitHub Issues to structured Markdown using the gh CLI",
+      "version": "1.0.0",
+      "license": "MIT"
+    },
+    {
+      "name": "veda-story-creator",
+      "source": "./skills/veda-story-creator",
+      "description": "Generates VEDA scrollytelling story MDX files with satellite data visualizations",
+      "version": "1.0.0",
+      "license": "MIT"
+    }
+  ]
+}
