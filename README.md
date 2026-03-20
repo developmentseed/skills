@@ -2,8 +2,6 @@
 
 A [Claude Code plugin marketplace](https://docs.anthropic.com/en/docs/claude-code/plugins) for shared AI Skills by [Development Seed](https://developmentseed.org). Skills are written in plain language, not code. They package up domain knowledge and workflows so AI tools can follow them.
 
-Skills aren't limited to coding tasks. Anything you can do on a computer is something a Skill can help with: prepping for a conference, reviewing a blog post, summarizing a podcast episode, auditing a frontend for accessibility.
-
 ## What's here
 
 - **[github-issue-to-markdown](skills/github-issue-to-markdown/)**: exports GitHub issues (including from private repos) to structured Markdown using the `gh` CLI
