@@ -268,7 +268,7 @@ def convert(input_path: str, output_path: str, variable: str | None = None,
             ) as dst:
                 dst.write(data, 1)
 
-            sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "shared"))
+            sys.path.insert(0, os.path.dirname(__file__))
             from reproject import reproject_to_cog
             reproject_to_cog(tmp_path, output_path, compression=compression, verbose=verbose)
         finally:

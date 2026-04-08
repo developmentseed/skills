@@ -67,6 +67,7 @@ def _reproject_gdalwarp(
     verbose: bool,
 ) -> None:
     """Reproject using gdalwarp with COG output driver."""
+    # gdalwarp uses different resampling names than rasterio for some methods
     resample_map = {
         "nearest": "near",
         "bilinear": "bilinear",
@@ -111,6 +112,7 @@ def _reproject_gdalwarp(
         if verbose and result.stderr:
             print(result.stderr.strip())
 
+        # gdalwarp -of COG produces a valid COG directly
         os.rename(tmp_output, output_path)
 
     if verbose:

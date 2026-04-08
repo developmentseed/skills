@@ -1,0 +1,5 @@
+{
+  "name": "cng-shapefile-to-geoparquet",
+  "description": "Convert Shapefiles (including zipped) to GeoParquet with column lowercasing and validation",
+  "version": "1.0.0"
+}

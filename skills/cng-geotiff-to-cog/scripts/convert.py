@@ -45,7 +45,7 @@ def convert(input_path: str, output_path: str, compression: str = "DEFLATE", ver
     if needs_reproject:
         if verbose:
             print("CRS is not EPSG:4326, reprojecting...")
-        sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "shared"))
+        sys.path.insert(0, os.path.dirname(__file__))
         from reproject import reproject_to_cog
         reproject_to_cog(input_path, output_path, compression=compression, verbose=verbose)
     else:
