@@ -1,0 +1,5 @@
+{
+  "name": "cng-conversions",
+  "description": "Convert geospatial files (GeoTIFF, NetCDF, GeoJSON, Shapefile) to cloud-native formats (COG, GeoParquet) with validation",
+  "version": "1.0.0"
+}
