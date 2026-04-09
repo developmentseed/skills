@@ -1,0 +1,452 @@
+"""Validate that a COG preserves all data from the source GeoTIFF."""
+
+import argparse
+import dataclasses
+import os
+import sys
+import tempfile
+
+import numpy as np
+import rasterio
+from rio_cogeo import cog_validate
+
+@dataclasses.dataclass
+class CheckResult:
+    name: str
+    passed: bool
+    detail: str
+
+
+def check_cog_valid(output_path: str) -> CheckResult:
+    """Check that the file is a valid COG."""
+    is_valid, errors, warnings = cog_validate(output_path)
+    if is_valid:
+        return CheckResult("COG structure", True, "Valid COG")
+    return CheckResult("COG structure", False, f"Invalid COG: {errors}")
+
+
+
+def check_bounds_match(input_path: str, output_path: str, tolerance: float = 1e-6) -> CheckResult:
+    """Check that bounding box is preserved."""
+    with rasterio.open(input_path) as src, rasterio.open(output_path) as dst:
+        for attr in ("left", "bottom", "right", "top"):
+            src_val = getattr(src.bounds, attr)
+            dst_val = getattr(dst.bounds, attr)
+            if abs(src_val - dst_val) > tolerance:
+                return CheckResult("Bounds preserved", False,
+                                   f"{attr}: source={src_val}, output={dst_val}")
+        return CheckResult("Bounds preserved", True,
+                           f"({src.bounds.left:.6f}, {src.bounds.bottom:.6f}, "
+                           f"{src.bounds.right:.6f}, {src.bounds.top:.6f})")
+
+
+def check_dimensions_match(input_path: str, output_path: str) -> CheckResult:
+    """Check that pixel dimensions are preserved."""
+    with rasterio.open(input_path) as src, rasterio.open(output_path) as dst:
+        if src.width == dst.width and src.height == dst.height:
+            return CheckResult("Dimensions", True, f"{src.width}x{src.height}")
+        return CheckResult("Dimensions", False,
+                           f"Source: {src.width}x{src.height}, Output: {dst.width}x{dst.height}")
+
+
+def check_band_count(input_path: str, output_path: str) -> CheckResult:
+    """Check that band count is preserved."""
+    with rasterio.open(input_path) as src, rasterio.open(output_path) as dst:
+        if src.count == dst.count:
+            return CheckResult("Band count", True, f"{src.count}")
+        return CheckResult("Band count", False, f"Source: {src.count}, Output: {dst.count}")
+
+
+def check_band_metadata(input_path: str, output_path: str) -> CheckResult:
+    """Advisory: report band descriptions and color interpretation."""
+    with rasterio.open(output_path) as dst:
+        names = [d if d else f"Band {i+1}" for i, d in enumerate(dst.descriptions)]
+        interp = [ci.name for ci in dst.colorinterp]
+        detail = f"{dst.count} band(s): {', '.join(names)} | color interp: {', '.join(interp)} | dtype: {dst.dtypes[0]}"
+        return CheckResult("Band metadata", True, detail)
+
+
+def check_nodata_match(input_path: str, output_path: str) -> CheckResult:
+    """Check that nodata value is preserved."""
+    import math
+    with rasterio.open(input_path) as src, rasterio.open(output_path) as dst:
+        src_nd, dst_nd = src.nodata, dst.nodata
+        # NaN == NaN is False per IEEE 754, so handle explicitly
+        match = (src_nd == dst_nd) or (src_nd is not None and dst_nd is not None and math.isnan(src_nd) and math.isnan(dst_nd))
+        if match:
+            return CheckResult("NoData preserved", True, f"{src_nd}")
+        return CheckResult("NoData preserved", False,
+                           f"Source: {src_nd}, Output: {dst_nd}")
+
+
+def check_pixel_fidelity(input_path: str, output_path: str, n: int = 1000,
+                          tolerance: float = 1e-4) -> CheckResult:
+    """Sample random pixels and compare values."""
+    with rasterio.open(input_path) as src, rasterio.open(output_path) as dst:
+        rng = np.random.default_rng(42)
+        rows = rng.integers(0, src.height, size=n)
+        cols = rng.integers(0, src.width, size=n)
+
+        for band_idx in range(1, src.count + 1):
+            src_vals = np.array([
+                src.read(band_idx, window=rasterio.windows.Window(int(c), int(r), 1, 1))[0, 0]
+                for r, c in zip(rows, cols)
+            ])
+            dst_vals = np.array([
+                dst.read(band_idx, window=rasterio.windows.Window(int(c), int(r), 1, 1))[0, 0]
+                for r, c in zip(rows, cols)
+            ])
+
+            if np.issubdtype(src_vals.dtype, np.integer):
+                mismatches = np.sum(src_vals != dst_vals)
+                if mismatches > 0:
+                    return CheckResult("Pixel fidelity", False,
+                                       f"Band {band_idx}: {mismatches}/{n} integer pixels differ")
+            else:
+                max_diff = np.max(np.abs(src_vals.astype(float) - dst_vals.astype(float)))
+                if max_diff > tolerance:
+                    return CheckResult("Pixel fidelity", False,
+                                       f"Band {band_idx}: max diff={max_diff:.6f} exceeds {tolerance}")
+
+    return CheckResult("Pixel fidelity", True, f"{n} pixels sampled, all match")
+
+
+_MERCATOR_LAT_LIMIT = 85.051129
+
+
+def check_wgs84_bounds(output_path: str) -> CheckResult:
+    """Warn if COG has a projected CRS (bounds must be reprojected to WGS84 for STAC)."""
+    with rasterio.open(output_path) as dst:
+        if dst.crs is None:
+            return CheckResult("WGS84 compatibility", False, "No CRS defined")
+        if dst.crs.is_geographic:
+            return CheckResult("WGS84 compatibility", True,
+                               f"Geographic CRS ({dst.crs}), bounds are already in degrees")
+        return CheckResult("WGS84 compatibility", False,
+                           f"Projected CRS ({dst.crs}). STAC requires WGS84 bounds — "
+                           f"downstream ingest must reproject via rasterio.warp.transform_bounds()")
+
+
+def check_mercator_bounds(output_path: str) -> CheckResult:
+    """Check that WGS84 bounds are within the valid Web Mercator latitude range.
+
+    Polar or near-polar datasets can produce south=-90 or north=90 after WGS84
+    reprojection. Passing these directly to WebMercatorViewport.fitBounds (deck.gl)
+    produces NaN viewport values, causing the entire map layer to fail silently.
+    Downstream consumers must clamp to ±85.051129° before fitting bounds.
+    """
+    from rasterio.warp import transform_bounds
+
+    with rasterio.open(output_path) as dst:
+        if dst.crs is None:
+            return CheckResult("Mercator bounds", False, "No CRS defined")
+        if dst.crs.is_geographic:
+            wgs84 = dst.bounds
+            south, north = wgs84.bottom, wgs84.top
+        else:
+            west, south, east, north = transform_bounds(dst.crs, "EPSG:4326", *dst.bounds)
+
+    if south < -_MERCATOR_LAT_LIMIT or north > _MERCATOR_LAT_LIMIT:
+        return CheckResult(
+            "Mercator bounds",
+            False,
+            f"Bounds extend beyond Web Mercator range (south={south:.4f}, north={north:.4f}). "
+            f"Web Mercator is undefined at ±90°. Downstream map viewers must clamp to "
+            f"±{_MERCATOR_LAT_LIMIT}° before fitting the viewport.",
+        )
+    return CheckResult(
+        "Mercator bounds",
+        True,
+        f"Bounds within Web Mercator range (south={south:.4f}, north={north:.4f})",
+    )
+
+
+def check_rendering_metadata(output_path: str) -> CheckResult:
+    """Advisory: flag COGs that need special tile-server parameters for rendering.
+
+    Single-band non-uint8 COGs need `rescale=min,max` when using `colormap_name`
+    with titiler. Without rescale, titiler returns 500 ("arrays used as indices
+    must be of integer type") because float/int16 values can't index into a
+    256-entry colormap lookup table. Multi-band (RGB) COGs must NOT use
+    colormap_name at all — titiler returns 500 for those as well.
+    """
+    with rasterio.open(output_path) as dst:
+        dtype = dst.dtypes[0]
+        bands = dst.count
+
+        if bands >= 3:
+            return CheckResult(
+                "Rendering metadata", True,
+                f"Multi-band ({bands} bands, {dtype}). Tile server must NOT apply "
+                f"colormap_name — serves as RGB directly."
+            )
+
+        if bands == 1 and dtype == "uint8":
+            return CheckResult(
+                "Rendering metadata", True,
+                f"Single-band uint8. Tile server can apply colormap_name without rescale."
+            )
+
+        if bands == 1:
+            # Use overview or sampling to avoid reading full band into memory
+            overviews = dst.overviews(1)
+            if overviews:
+                overview_level = overviews[-1]
+                data = dst.read(1, out_shape=(
+                    dst.height // overview_level,
+                    dst.width // overview_level,
+                ))
+            else:
+                rng = np.random.default_rng(42)
+                n_samples = min(10000, dst.height * dst.width)
+                sample_rows = rng.integers(0, dst.height, size=n_samples)
+                sample_cols = rng.integers(0, dst.width, size=n_samples)
+                data = np.array([
+                    dst.read(1, window=rasterio.windows.Window(int(c), int(r), 1, 1))[0, 0]
+                    for r, c in zip(sample_rows, sample_cols)
+                ])
+            valid = data.ravel()
+            if dst.nodata is not None:
+                if np.isnan(dst.nodata):
+                    valid = valid[~np.isnan(valid)]
+                else:
+                    valid = valid[valid != dst.nodata]
+                    valid = valid[~np.isnan(valid)]
+            else:
+                valid = valid[~np.isnan(valid)]
+            if valid.size == 0:
+                return CheckResult(
+                    "Rendering metadata", False,
+                    "Single-band but all pixels are nodata — cannot compute rescale range."
+                )
+            p2 = float(np.percentile(valid, 2))
+            p98 = float(np.percentile(valid, 98))
+            return CheckResult(
+                "Rendering metadata", True,
+                f"Single-band {dtype}. Tile server needs rescale={p2:.4f},{p98:.4f} "
+                f"(p2/p98) when applying colormap_name."
+            )
+
+        return CheckResult(
+            "Rendering metadata", True,
+            f"{bands} band(s), {dtype}. Review tile server parameters for this configuration."
+        )
+
+
+def check_overviews(output_path: str, min_levels: int = 3) -> CheckResult:
+    """Check that internal overviews are present."""
+    with rasterio.open(output_path) as dst:
+        overviews = dst.overviews(1)
+        if len(overviews) >= min_levels:
+            return CheckResult("Overviews", True, f"{len(overviews)} levels: {overviews}")
+        return CheckResult("Overviews", False,
+                           f"Found {len(overviews)} levels (need >= {min_levels}): {overviews}")
+
+
+def print_report(results: list[CheckResult]):
+    """Print a formatted pass/fail report."""
+    print("\n" + "=" * 50)
+    print("VALIDATION REPORT")
+    print("=" * 50)
+
+    all_passed = True
+    for r in results:
+        status = "PASS" if r.passed else "FAIL"
+        icon = "+" if r.passed else "!"
+        print(f"  [{icon}] {status}: {r.name}")
+        print(f"        {r.detail}")
+        if not r.passed:
+            all_passed = False
+
+    print("=" * 50)
+    if all_passed:
+        print("RESULT: ALL CHECKS PASSED")
+    else:
+        failed = sum(1 for r in results if not r.passed)
+        print(f"RESULT: {failed} CHECK(S) FAILED")
+    print("=" * 50 + "\n")
+
+    return all_passed
+
+
+def generate_synthetic_geotiff(path: str):
+    """Generate a small synthetic GeoTIFF for self-testing."""
+    with rasterio.open(
+        path,
+        "w",
+        driver="GTiff",
+        width=256,
+        height=256,
+        count=2,
+        dtype="float32",
+        crs="EPSG:4326",
+        transform=rasterio.transform.from_bounds(-10, -10, 10, 10, 256, 256),
+        nodata=-9999.0,
+    ) as dst:
+        rng = np.random.default_rng(123)
+        for band in range(1, 3):
+            data = rng.standard_normal((256, 256)).astype(np.float32)
+            data[0:10, 0:10] = -9999.0
+            dst.write(data, band)
+
+
+def generate_projected_geotiff(path: str):
+    """Generate a small synthetic GeoTIFF in EPSG:5070 for self-testing."""
+    from rasterio.crs import CRS
+    with rasterio.open(
+        path, "w", driver="GTiff", width=64, height=64, count=1, dtype="float32",
+        crs=CRS.from_epsg(5070),
+        transform=rasterio.transform.from_bounds(1000000, 1500000, 1100000, 1600000, 64, 64),
+        nodata=-9999.0,
+    ) as dst:
+        rng = np.random.default_rng(456)
+        data = rng.standard_normal((64, 64)).astype(np.float32)
+        data[0:5, 0:5] = -9999.0
+        dst.write(data, 1)
+
+
+def check_crs_4326(output_path: str) -> CheckResult:
+    """Check that the output COG is in EPSG:4326."""
+    with rasterio.open(output_path) as dst:
+        epsg = dst.crs.to_epsg() if dst.crs else None
+        if epsg == 4326:
+            return CheckResult("CRS EPSG:4326", True, "EPSG:4326")
+        return CheckResult("CRS EPSG:4326", False, f"Expected EPSG:4326, got {dst.crs}")
+
+
+def run_self_test() -> bool:
+    """Generate synthetic data, convert, and validate."""
+    print("Running self-test...")
+
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    convert_path = os.path.join(script_dir, "convert.py")
+    if not os.path.isfile(convert_path):
+        print(f"Error: convert.py not found at {convert_path}")
+        return False
+
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("convert", convert_path)
+    convert_mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(convert_mod)
+
+    print("\n--- Test 1: EPSG:4326 GeoTIFF ---")
+    with tempfile.TemporaryDirectory() as tmpdir:
+        input_path = os.path.join(tmpdir, "test_input.tif")
+        output_path = os.path.join(tmpdir, "test_output.tif")
+
+        print("Generating synthetic GeoTIFF...")
+        generate_synthetic_geotiff(input_path)
+
+        print("Converting to COG...")
+        convert_mod.convert(input_path, output_path, verbose=True)
+
+        print("Validating...")
+        all_passed = run_validation(input_path, output_path)
+
+    # Test 2: Projected GeoTIFF
+    print("\n--- Test 2: Projected GeoTIFF (EPSG:5070) ---")
+    with tempfile.TemporaryDirectory() as tmpdir:
+        proj_input = os.path.join(tmpdir, "test_projected.tif")
+        proj_output = os.path.join(tmpdir, "test_projected_cog.tif")
+        print("Generating synthetic EPSG:5070 GeoTIFF...")
+        generate_projected_geotiff(proj_input)
+        print("Converting to COG (should reproject to EPSG:4326)...")
+        convert_mod.convert(proj_input, proj_output, verbose=True)
+        print("Validating...")
+        with rasterio.open(proj_output) as dst:
+            epsg = dst.crs.to_epsg() if dst.crs else None
+            if epsg != 4326:
+                print(f"FAIL: Expected EPSG:4326, got {dst.crs}")
+                all_passed = False
+            else:
+                is_valid, _, _ = cog_validate(proj_output)
+                if not is_valid:
+                    print("FAIL: Output is not a valid COG")
+                    all_passed = False
+                else:
+                    b = dst.bounds
+                    print(f"PASS: Valid COG in EPSG:4326 ({b.left:.2f}, {b.bottom:.2f}, "
+                          f"{b.right:.2f}, {b.top:.2f})")
+    return all_passed
+
+
+def run_checks(input_path: str, output_path: str) -> list[CheckResult]:
+    """Run core data-integrity checks and return structured results.
+
+    These checks verify that the COG faithfully preserves the source data.
+    A failed check here means the conversion produced incorrect output.
+
+    Advisory checks (downstream compatibility notes that don't indicate data
+    corruption) are in run_advisory_checks and are NOT included here so that
+    pipeline callers can treat failures as hard errors without false positives.
+    """
+    with rasterio.open(input_path) as src:
+        input_is_4326 = src.crs and src.crs.to_epsg() == 4326
+
+    checks = [
+        check_cog_valid(output_path),
+        check_crs_4326(output_path),
+    ]
+
+    if input_is_4326:
+        checks.extend([
+            check_bounds_match(input_path, output_path),
+            check_dimensions_match(input_path, output_path),
+            check_pixel_fidelity(input_path, output_path),
+            check_nodata_match(input_path, output_path),
+        ])
+
+    checks.extend([
+        check_band_count(input_path, output_path),
+        check_overviews(output_path),
+    ])
+    return checks
+
+
+def run_advisory_checks(input_path: str, output_path: str) -> list[CheckResult]:
+    """Run advisory downstream-compatibility checks.
+
+    These checks do NOT indicate data corruption — the COG is valid. They flag
+    characteristics that require special handling by downstream consumers
+    (e.g. STAC ingest, web map viewers). Failed advisory checks are shown to
+    users as informational warnings, not as pipeline errors.
+    """
+    return [
+        check_wgs84_bounds(output_path),
+        check_mercator_bounds(output_path),
+        check_band_metadata(input_path, output_path),
+        check_rendering_metadata(output_path),
+    ]
+
+
+def run_validation(input_path: str, output_path: str) -> bool:
+    """Run all validation checks and print report."""
+    results = run_checks(input_path, output_path) + run_advisory_checks(input_path, output_path)
+    return print_report(results)
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Validate a COG against its source GeoTIFF")
+    parser.add_argument("--input", help="Path to original GeoTIFF (omit for self-test)")
+    parser.add_argument("--output", help="Path to converted COG (omit for self-test)")
+    args = parser.parse_args()
+
+    if args.input is None and args.output is None:
+        passed = run_self_test()
+    elif args.input and args.output:
+        if not os.path.isfile(args.input):
+            print(f"Error: input file not found: {args.input}")
+            sys.exit(1)
+        if not os.path.isfile(args.output):
+            print(f"Error: output file not found: {args.output}")
+            sys.exit(1)
+        passed = run_validation(args.input, args.output)
+    else:
+        print("Error: provide both --input and --output, or neither for self-test")
+        sys.exit(1)
+
+    sys.exit(0 if passed else 1)
+
+
+if __name__ == "__main__":
+    main()
