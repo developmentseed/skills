@@ -1,5 +1,5 @@
 {
-  "name": "cng-geotiff-to-cog",
+  "name": "geotiff-to-cog",
   "description": "Convert GeoTIFF files to Cloud-Optimized GeoTIFFs (COG) with automatic CRS reprojection and validation",
   "version": "1.0.0"
 }

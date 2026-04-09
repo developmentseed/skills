@@ -1,5 +1,5 @@
 ---
-name: cng-netcdf-to-cog
+name: netcdf-to-cog
 description: Convert NetCDF files to Cloud-Optimized GeoTIFFs (COG) with support for geostationary satellites, CF conventions, and automatic CRS reprojection. Use when preparing climate/weather/satellite data for web visualization.
 ---
 
@@ -10,7 +10,7 @@ Converts a NetCDF variable and timestep to a Cloud-Optimized GeoTIFF (COG) for e
 ## Prerequisites
 
 - Python 3.10+
-- `pip install xarray netcdf4 rasterio rio-cogeo numpy pyproj`
+- `pip install -r requirements.txt`
 
 ## Scripts
 

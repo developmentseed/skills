@@ -23,29 +23,29 @@
       "license": "MIT"
     },
     {
-      "name": "cng-geotiff-to-cog",
-      "source": "./skills/cng-geotiff-to-cog",
+      "name": "geotiff-to-cog",
+      "source": "./skills/geotiff-to-cog",
       "description": "Convert GeoTIFF files to Cloud-Optimized GeoTIFFs (COG) with automatic CRS reprojection and validation",
       "version": "1.0.0",
       "license": "MIT"
     },
     {
-      "name": "cng-netcdf-to-cog",
-      "source": "./skills/cng-netcdf-to-cog",
+      "name": "netcdf-to-cog",
+      "source": "./skills/netcdf-to-cog",
       "description": "Convert NetCDF files to Cloud-Optimized GeoTIFFs (COG) with support for geostationary satellites and CF conventions",
       "version": "1.0.0",
       "license": "MIT"
     },
     {
-      "name": "cng-geojson-to-geoparquet",
-      "source": "./skills/cng-geojson-to-geoparquet",
+      "name": "geojson-to-geoparquet",
+      "source": "./skills/geojson-to-geoparquet",
       "description": "Convert GeoJSON files to GeoParquet with column lowercasing and validation",
       "version": "1.0.0",
       "license": "MIT"
     },
     {
-      "name": "cng-shapefile-to-geoparquet",
-      "source": "./skills/cng-shapefile-to-geoparquet",
+      "name": "shapefile-to-geoparquet",
+      "source": "./skills/shapefile-to-geoparquet",
       "description": "Convert Shapefiles (including zipped) to GeoParquet with column lowercasing and validation",
       "version": "1.0.0",
       "license": "MIT"

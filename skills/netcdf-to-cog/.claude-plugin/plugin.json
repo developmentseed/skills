@@ -1,5 +1,5 @@
 {
-  "name": "cng-netcdf-to-cog",
+  "name": "netcdf-to-cog",
   "description": "Convert NetCDF files to Cloud-Optimized GeoTIFFs (COG) with support for geostationary satellites, CF conventions, and automatic CRS reprojection",
   "version": "1.0.0"
 }

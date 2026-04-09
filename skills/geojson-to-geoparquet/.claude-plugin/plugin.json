@@ -1,5 +1,5 @@
 {
-  "name": "cng-geojson-to-geoparquet",
+  "name": "geojson-to-geoparquet",
   "description": "Convert GeoJSON files to GeoParquet with column lowercasing and validation",
   "version": "1.0.0"
 }
