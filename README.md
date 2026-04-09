@@ -6,6 +6,10 @@ A [Claude Code plugin marketplace](https://docs.anthropic.com/en/docs/claude-cod
 
 - **[github-issue-to-markdown](skills/github-issue-to-markdown/)**: exports GitHub issues (including from private repos) to structured Markdown using the `gh` CLI
 - **[veda-story-creator](skills/veda-story-creator/)**: generates [VEDA](https://www.earthdata.nasa.gov/dashboard) scrollytelling MDX stories with satellite data visualizations. Includes a dataset catalog, annotated examples, and lessons learned
+- **[geotiff-to-cog](skills/geotiff-to-cog/)**: converts GeoTIFF to Cloud-Optimized GeoTIFF with automatic CRS reprojection and validation
+- **[netcdf-to-cog](skills/netcdf-to-cog/)**: converts NetCDF to Cloud-Optimized GeoTIFF with support for geostationary satellites and CF conventions
+- **[geojson-to-geoparquet](skills/geojson-to-geoparquet/)**: converts GeoJSON to GeoParquet with column lowercasing and validation
+- **[shapefile-to-geoparquet](skills/shapefile-to-geoparquet/)**: converts Shapefiles (including zipped) to GeoParquet with column lowercasing and validation
 
 Know of a useful Skill that lives in another repo? See **[EXTERNAL-SKILLS.md](EXTERNAL-SKILLS.md)**.
 

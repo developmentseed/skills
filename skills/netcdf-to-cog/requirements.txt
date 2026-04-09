@@ -1,0 +1,6 @@
+xarray
+netcdf4
+rasterio
+rio-cogeo
+numpy
+pyproj

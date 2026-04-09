@@ -21,6 +21,34 @@
       "description": "Generates VEDA scrollytelling story MDX files with satellite data visualizations",
       "version": "1.0.0",
       "license": "MIT"
+    },
+    {
+      "name": "geotiff-to-cog",
+      "source": "./skills/geotiff-to-cog",
+      "description": "Convert GeoTIFF files to Cloud-Optimized GeoTIFFs (COG) with automatic CRS reprojection and validation",
+      "version": "1.0.0",
+      "license": "MIT"
+    },
+    {
+      "name": "netcdf-to-cog",
+      "source": "./skills/netcdf-to-cog",
+      "description": "Convert NetCDF files to Cloud-Optimized GeoTIFFs (COG) with support for geostationary satellites and CF conventions",
+      "version": "1.0.0",
+      "license": "MIT"
+    },
+    {
+      "name": "geojson-to-geoparquet",
+      "source": "./skills/geojson-to-geoparquet",
+      "description": "Convert GeoJSON files to GeoParquet with column lowercasing and validation",
+      "version": "1.0.0",
+      "license": "MIT"
+    },
+    {
+      "name": "shapefile-to-geoparquet",
+      "source": "./skills/shapefile-to-geoparquet",
+      "description": "Convert Shapefiles (including zipped) to GeoParquet with column lowercasing and validation",
+      "version": "1.0.0",
+      "license": "MIT"
     }
   ]
 }
