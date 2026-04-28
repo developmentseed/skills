@@ -21,6 +21,13 @@
       "description": "Generates VEDA scrollytelling story MDX files with satellite data visualizations",
       "version": "1.0.0",
       "license": "MIT"
+    },
+    {
+      "name": "devseed-poster",
+      "source": "./skills/devseed-poster",
+      "description": "Creates Development Seed conference posters as self-contained HTML files — design system, layout patterns, QR codes, and PDF export",
+      "version": "1.0.0",
+      "license": "MIT"
     }
   ]
 }
