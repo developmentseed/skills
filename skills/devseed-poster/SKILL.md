@@ -291,18 +291,63 @@ QR block HTML:
 
 ## PDF Export (print-ready)
 
+### Step 1 — add print CSS to the HTML (do this once, keep it in the file)
+
+Add inside `<style>` before `</style>`:
+
+```css
+@page { size: 1978px 1183px; margin: 0; }
+@media print {
+  html, body {
+    width: 1978px !important; height: 1183px !important;
+    display: block !important; overflow: hidden !important;
+    background: var(--bg) !important;
+  }
+  .scale-wrap { transform: none !important; }
+}
+```
+
+**Why**: the poster uses JS `transform: scale()` to fit the browser window. Without `@media print`, that transform runs during PDF rendering, scrambling the layout across multiple pages. `transform: none !important` disables it; `@page` declares the exact single-page canvas size so Chrome doesn't paginate.
+
+### Step 2 — inline the Google Fonts (one-time, before first export)
+
+The `@import url('https://fonts.googleapis.com/...')` causes headless Chromium to hang waiting for a network response. Replace it with inlined base64 font-faces:
+
+```bash
+python3 << 'EOF'
+import urllib.request, base64, re
+
+ua = {'User-Agent': 'Mozilla/5.0'}
+url = 'https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=DM+Mono:wght@400;500&family=DM+Sans:wght@300;400;500;600&display=swap'
+css = urllib.request.urlopen(urllib.request.Request(url, headers=ua)).read().decode()
+
+def inline(u):
+    data = urllib.request.urlopen(urllib.request.Request(u, headers=ua)).read()
+    return f"data:font/truetype;base64,{base64.b64encode(data).decode()}"
+
+inlined = re.sub(r'url\((https://fonts\.gstatic\.com/[^)]+)\)', lambda m: f'url({inline(m.group(1))})', css)
+
+with open('poster.html') as f: html = f.read()
+html = html.replace(
+    "  @import url('https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=DM+Mono:wght@400;500&family=DM+Sans:wght@300;400;500;600&display=swap');",
+    inlined)
+with open('poster.html', 'w') as f: f.write(html)
+print(f"Done — {len(html)//1024} KB, fully self-contained")
+EOF
+```
+
+### Step 3 — export
+
 ```bash
 /snap/bin/chromium --headless=new --no-sandbox \
-  --print-to-pdf=poster.pdf \
-  --print-to-pdf-no-header \
   --no-pdf-header-footer \
-  --paper-width=77.87 \
-  --paper-height=46.57 \
+  --print-to-pdf=poster.pdf \
   "file:///absolute/path/to/poster.html"
 ```
 
-Dimensions: 1978 mm ÷ 25.4 = 77.87 in · 1183 mm ÷ 25.4 = 46.57 in.
-Verify in PDF viewer that page size is 1978 × 1183 mm before sending to print.
+No `--paper-width/height` needed — `@page` in the CSS handles the page size.
+The resulting PDF is a single page at 1978×1183 CSS px (~521×312 mm at 96 dpi).
+Send to printer at 100% scale or ask them to scale to board size (1978×1183 mm).
 
 ---
 

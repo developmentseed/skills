@@ -174,6 +174,17 @@ Full starter HTML for a Development Seed conference poster. Replace all `FILL:` 
     display: flex; align-items: center; justify-content: center; font-size: 15px;
   }
 
+  /* ── PRINT — required for correct single-page PDF export ── */
+  @page { size: 1978px 1183px; margin: 0; }
+  @media print {
+    html, body {
+      width: 1978px !important; height: 1183px !important;
+      display: block !important; overflow: hidden !important;
+      background: var(--bg) !important;
+    }
+    .scale-wrap { transform: none !important; }
+  }
+
   /* ── GRID PLACEMENT — adjust spans to your content ── */
   /* Example: 3-col left / 5-col middle / 4-col right across all rows */
   .c-intro    { grid-column: 1 / 4;  grid-row: 1; }
