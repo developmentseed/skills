@@ -2,7 +2,7 @@
 name: setup-python-repo
 description: Scaffold CI/CD, linting, and dependency automation for a Python project using GitHub Actions. Sets up uv-based CI with pre-commit, ruff, pytest, dependabot, docs builds, security checks, release-please, and optional PyPI publishing. Use when the user says anything like "set up CI for my Python repo", "add GitHub Actions", "scaffold Python project automation", or "create workflows for lint/test/deploy".
 metadata:
-  author: user
+  author: @hrodmn
   version: "1.0.0"
 ---
 
