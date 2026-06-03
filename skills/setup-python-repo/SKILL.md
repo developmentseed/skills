@@ -253,7 +253,7 @@ jobs:
           token: ${{ steps.app-token.outputs.token }}
 ```
 
-**Note:** Some organizations use a GitHub app token for release-please. For a new project, `secrets.GITHUB_TOKEN` is the safe default. If the user has a release bot app, ask whether to configure it instead. When minting an app token with `actions/create-github-app-token`, explicitly set the `permission-*` inputs to the minimum permissions release-please needs instead of inheriting the app installation's full permission set.
+**Note:** For repositories in the `developmentseed` GitHub organization, use the `DS_RELEASE_BOT_ID` and `DS_RELEASE_BOT_PRIVATE_KEY` secrets for release-please by default. For projects outside that org, `secrets.GITHUB_TOKEN` is the safe default unless the user asks to use a GitHub App instead. When minting an app token with `actions/create-github-app-token`, explicitly set the `permission-*` inputs to the minimum permissions release-please needs instead of inheriting the app installation's full permission set.
 
 - Configure a release-please manifest if release-please was enabled (`release-please-config.json` and `.release-please-manifest.json`). Use git to identify the latest version tag and set the current version in the manifest file so release-please knows where to start when incrementing the version for the next release.
 
