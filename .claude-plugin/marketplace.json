@@ -33,7 +33,7 @@
       "name": "setup-python-repo",
       "source": "./skills/setup-python-repo",
       "description": "Scaffold CI/CD, linting, and dependency automation for a Python project using GitHub Actions",
-      "version": "1.0.0",
+      "version": "1.0.1",
       "license": "MIT"
     }
   ]

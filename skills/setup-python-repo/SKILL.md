@@ -3,7 +3,7 @@ name: setup-python-repo
 description: Scaffold CI/CD, linting, and dependency automation for a Python project using GitHub Actions. Sets up uv-based CI with pre-commit, ruff, pytest, dependabot, docs builds, security checks, release-please, and optional PyPI publishing. Use when the user says anything like "set up CI for my Python repo", "add GitHub Actions", "scaffold Python project automation", or "create workflows for lint/test/deploy".
 metadata:
   author: hrodmn
-  version: "1.0.0"
+  version: "1.0.1"
 ---
 
 # Setup Python Repository
@@ -188,7 +188,7 @@ jobs:
           persist-credentials: false
 
       - name: Run zizmor
-        uses: zizmorcore/zizmor-action@b1d7e1fb5de872772f31590499237e7cce841e8e # v0.5.3
+        uses: zizmorcore/zizmor-action@5f14fd08f7cf1cb1609c1e344975f152c7ee938d # v0.5.6
 ```
 
 #### `conventional-commits-prs.yml` (optional)
@@ -240,18 +240,20 @@ jobs:
     outputs:
       release_created: ${{ steps.release.outputs.release_created }}
     steps:
-      - uses: actions/create-github-app-token@df432ceedc7162793a195dd1713ff69aefc7379e # v2.0.6
+      - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         id: app-token
         with:
           app-id: ${{ secrets.DS_RELEASE_BOT_ID }}
           private-key: ${{ secrets.DS_RELEASE_BOT_PRIVATE_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
       - uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
         id: release
         with:
           token: ${{ steps.app-token.outputs.token }}
 ```
 
-**Note:** Some organizations use a GitHub app token for release-please. For a new project, `secrets.GITHUB_TOKEN` is the safe default. If the user has a release bot app, ask whether to configure it instead.
+**Note:** Some organizations use a GitHub app token for release-please. For a new project, `secrets.GITHUB_TOKEN` is the safe default. If the user has a release bot app, ask whether to configure it instead. When minting an app token with `actions/create-github-app-token`, explicitly set the `permission-*` inputs to the minimum permissions release-please needs instead of inheriting the app installation's full permission set.
 
 - Configure a release-please manifest if release-please was enabled (`release-please-config.json` and `.release-please-manifest.json`). Use git to identify the latest version tag and set the current version in the manifest file so release-please knows where to start when incrementing the version for the next release.
 
