@@ -5,6 +5,7 @@ A [Claude Code plugin marketplace](https://docs.anthropic.com/en/docs/claude-cod
 ## What's here
 
 - **[github-issue-to-markdown](skills/github-issue-to-markdown/)**: exports GitHub issues (including from private repos) to structured Markdown using the `gh` CLI
+- **[setup-python-repo](skills/setup-python-repo/)**: scaffolds CI/CD, linting, release automation, and dependency automation for uv-based Python repositories using GitHub Actions
 - **[veda-story-creator](skills/veda-story-creator/)**: generates [VEDA](https://www.earthdata.nasa.gov/dashboard) scrollytelling MDX stories with satellite data visualizations. Includes a dataset catalog, annotated examples, and lessons learned
 
 Know of a useful Skill that lives in another repo? See **[EXTERNAL-SKILLS.md](EXTERNAL-SKILLS.md)**.
@@ -27,9 +28,19 @@ Skills use the SKILL.md format, which works across multiple AI tools.
 cp -r skills/skill-name ~/.claude/skills/    # Claude Code
 cp -r skills/skill-name ~/.codex/skills/     # Codex CLI
 cp -r skills/skill-name ~/.gemini/skills/    # Gemini CLI
+cp -r skills/skill-name ~/.pi/agent/skills/  # pi
 
 # Per-project
 cp -r skills/skill-name your-project/.claude/skills/
+```
+
+If you do not want to install the whole collection, clone this repo locally and symlink only the specific skill folders you want into one or more agent config directories:
+
+```bash
+ln -s /path/to/skills/skills/skill-name ~/.claude/skills/skill-name
+ln -s /path/to/skills/skills/skill-name ~/.codex/skills/skill-name
+ln -s /path/to/skills/skills/skill-name ~/.gemini/skills/skill-name
+ln -s /path/to/skills/skills/skill-name ~/.pi/agent/skills/skill-name
 ```
 
 ### Cross-tool compatibility
@@ -39,6 +50,7 @@ cp -r skills/skill-name your-project/.claude/skills/
 | **Claude Code** | `~/.claude/skills/skill-name/` or `.claude/skills/` | Yes, also supports `/plugin marketplace add` |
 | **OpenAI Codex CLI** | `~/.codex/skills/skill-name/` or `.codex/skills/` | Yes |
 | **Gemini CLI** | `~/.gemini/skills/skill-name/` or `.gemini/skills/` | Yes |
+| **pi** | `~/.pi/agent/skills/skill-name/` | Yes |
 | **Cursor** (agent mode, v2.4+) | `.cursor/skills/skill-name/` | Yes |
 | **Windsurf** | `.windsurf/workflows/skill-name/` | Yes (via `/workflow-name`) |
 
