@@ -1,0 +1,8 @@
+user: my test is failing, not sure why
+assistant: Let me look at the error. Can you share the traceback?
+user: AttributeError: 'NoneType' object has no attribute 'split'
+assistant: The variable is None somewhere. Add a print statement before the split call to debug.
+user: oh I see it, the function returns None when the file is empty
+assistant: Right. Add a guard: if text is None: return []. That should fix it.
+user: great it works now thanks
+assistant: Happy to help!

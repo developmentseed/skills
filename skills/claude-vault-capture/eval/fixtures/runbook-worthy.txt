@@ -1,0 +1,25 @@
+user: can you write me a runbook for rotating the database master password in prod? we use AWS RDS, secrets manager, and the app reads the secret at startup.
+assistant: Here's the prod DB password rotation runbook:
+
+**Pre-rotation checklist**
+1. Confirm you have AWS Console + CLI access with SecretsManager:RotateSecret permission
+2. Schedule a 15-min maintenance window — rotation triggers one app restart
+3. Notify on-call that rotation is starting
+
+**Rotation steps**
+1. `aws secretsmanager rotate-secret --secret-id prod/myapp/db-password --rotation-lambda-arn arn:aws:lambda:us-east-1:ACCOUNT:function:SecretsManagerRotation`
+2. Watch CloudWatch Logs for the rotation Lambda: confirm `setSecret` and `finishSecret` events complete within 60s
+3. Trigger a rolling restart of ECS tasks: `aws ecs update-service --cluster prod --service myapp --force-new-deployment`
+4. Watch ECS task health — new tasks should come up green within 3 min
+5. Verify app is reading the new secret: `kubectl logs -l app=myapp | grep "db connected"` (or equivalent)
+
+**Rollback**
+- If tasks fail to start: `aws secretsmanager rollback-secret --secret-id prod/myapp/db-password` (only available within 24h of rotation)
+- If Lambda rotation fails: manually set the secret value back via Console and restart tasks
+
+**Post-rotation**
+- Confirm old password no longer works: `psql -h prod-db.example.com -U appuser -W` (use old password — should fail)
+- Update `last-rotated` in the internal security tracker
+
+user: perfect, should I run this on staging first?
+assistant: Yes, always. The rotation Lambda behavior can differ between environments if the Lambda version is different. Run the exact same steps on staging → verify → then prod. Also confirm the rotation Lambda has the right VPC config to reach the RDS instance — that's the most common failure mode.

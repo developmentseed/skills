@@ -1,0 +1,32 @@
+[project]
+name = "claude-vault-capture"
+version = "0.2.0"
+description = "Automatic Claude Code session capture into an Obsidian vault on SessionEnd."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { file = "LICENSE" }
+authors = [{ name = "Loïc Houpert" }]
+keywords = ["claude-code", "obsidian", "hooks", "knowledge-capture"]
+
+# The runtime dependency (anthropic) is declared as PEP 723 inline metadata in
+# hooks/curate.py, which is how the installed plugin runs the worker (`uv run`).
+# This file exists for the test suite and linting only. Subscription mode pulls
+# claude-agent-sdk via `uv run --with` at hook time (see session-end-capture.sh).
+dependencies = []
+
+# Dev/test deps in a PEP 735 group, installed by default with `uv sync`. PyYAML
+# is test-only: the runtime parses frontmatter with stdlib regex, never imports yaml.
+[dependency-groups]
+dev = ["pytest==9.0.3", "pyyaml==6.0.3", "ruff==0.15.16"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff.lint]
+# Default rules (E, F) plus W605: catch invalid string-escape sequences, which
+# become SyntaxErrors in future Python and silently break regex patterns.
+extend-select = ["W605"]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests insert hooks/ into sys.path before importing the modules under test.
+"tests/**" = ["E402"]
