@@ -1,0 +1,123 @@
+{
+  "debugging-only": {
+    "path_a": null,
+    "path_b": {
+      "title": "Debugging NoneType AttributeError in text processing",
+      "body": "## What happened\n- User encountered AttributeError: 'NoneType' has no attribute 'split'\n- Root cause: function returned None on empty file input\n- Fix: added guard `if text is None: return []`\n\n## Outputs\n- Bug fixed in text processing function\n\n## Source\n",
+      "source_links": [],
+      "tags": ["debugging", "python"],
+      "tokens_in": 200,
+      "tokens_out": 80,
+      "cost_usd": 0.00005
+    }
+  },
+  "adr-worthy": {
+    "path_a": {
+      "title": "Decision: PostgreSQL with PgBouncer for session store",
+      "type": "decision",
+      "body": "We chose PostgreSQL for the session store over MongoDB.\n\n**Rationale:** Fixed schema, team SQL familiarity, atomic upsert requirements, 50k sessions/day fits comfortably within Postgres capacity.\n\n**Schema:** sessions(session_id UUID PK, user_id, data jsonb, created_at, expires_at). Partial index on `WHERE expires_at > now()` for hot-path lookups.\n\n**Connection pooling:** PgBouncer in transaction mode (2x instance count pool size). Short upsert/select queries make transaction pooling appropriate.\n\n**Rejected:** MongoDB — no advantage given fixed schema and team familiarity with SQL; adds operational complexity without benefit.",
+      "source_links": [],
+      "tags": ["database", "architecture", "postgresql"],
+      "tokens_in": 400,
+      "tokens_out": 200,
+      "cost_usd": 0.004
+    },
+    "path_b": {
+      "title": "Session store tech selection: PostgreSQL + PgBouncer",
+      "body": "## What happened\n- Evaluated PostgreSQL vs MongoDB for session store\n- Requirements: 50k sessions/day, fixed schema, atomic upserts, 24h TTL\n- Decided on PostgreSQL\n- Designed PgBouncer transaction-mode pooling setup\n\n## Outputs\n- Architecture decision: PostgreSQL + PgBouncer\n- Schema design: sessions table with jsonb data column\n- Partial index on expires_at for query performance\n\n## Source\n",
+      "source_links": [],
+      "tags": ["database", "architecture", "postgresql"],
+      "tokens_in": 400,
+      "tokens_out": 120,
+      "cost_usd": 0.00015
+    }
+  },
+  "runbook-worthy": {
+    "path_a": {
+      "title": "Runbook: Rotate AWS RDS Master Password via Secrets Manager",
+      "type": "runbook",
+      "body": "**Pre-rotation checklist**\n1. Confirm AWS Console + CLI access with SecretsManager:RotateSecret permission\n2. Schedule 15-min maintenance window\n3. Notify on-call\n\n**Rotation steps**\n1. `aws secretsmanager rotate-secret --secret-id prod/myapp/db-password --rotation-lambda-arn <ARN>`\n2. Watch CloudWatch Logs for rotation Lambda — confirm setSecret + finishSecret within 60s\n3. Rolling restart: `aws ecs update-service --cluster prod --service myapp --force-new-deployment`\n4. Watch ECS task health — green within 3 min\n5. Verify app connects with new secret\n\n**Rollback**\n- `aws secretsmanager rollback-secret --secret-id prod/myapp/db-password` (within 24h)\n- If Lambda fails: set secret manually via Console, restart tasks\n\n**Post-rotation**\n- Confirm old password no longer works\n- Update last-rotated in security tracker",
+      "source_links": [],
+      "tags": ["aws", "rds", "security", "runbook"],
+      "tokens_in": 500,
+      "tokens_out": 300,
+      "cost_usd": 0.006
+    },
+    "path_b": {
+      "title": "AWS RDS password rotation procedure via Secrets Manager",
+      "body": "## What happened\n- Created runbook for rotating RDS master password in prod\n- Covered pre-rotation checklist, rotation steps, rollback, and post-rotation verification\n- Key insight: rotation Lambda needs VPC config to reach RDS — common failure mode\n- Recommended: always run on staging first before prod\n\n## Outputs\n- Runbook document for prod DB password rotation\n\n## Source\n",
+      "source_links": [],
+      "tags": ["aws", "rds", "security"],
+      "tokens_in": 500,
+      "tokens_out": 100,
+      "cost_usd": 0.00018
+    }
+  },
+  "mixed": {
+    "path_a": {
+      "title": "Decision: Redis for cross-instance API caching",
+      "type": "decision",
+      "body": "Multi-instance ECS deployment (3 tasks) requires shared cache — in-process cache would give inconsistent hits across instances.\n\n**Decision:** Redis with redis-py + connection pool.\n\n**Key scheme:**\n- User prefs: `user:prefs:{user_id}` → TTL 300s\n- Product catalog: `catalog:product:{product_id}` → TTL 3600s\n\n**Config:** `maxmemory-policy allkeys-lru` for graceful eviction.\n\n**Watch for:** Thundering herd on rolling deploys — stagger deployments or add TTL jitter (±10%).",
+      "source_links": [],
+      "tags": ["caching", "redis", "architecture"],
+      "tokens_in": 600,
+      "tokens_out": 180,
+      "cost_usd": 0.0035
+    },
+    "path_b": {
+      "title": "Redis caching setup and pytest import fix",
+      "body": "## What happened\n- Decided to use Redis over in-process cache for 3-instance ECS deployment\n- Fixed pytest ModuleNotFoundError by adding pythonpath=. to pytest.ini\n- Designed cache key namespace scheme for user prefs and product catalog\n- Discussed thundering herd risk on rolling deploys\n\n## Outputs\n- Redis cache key scheme: user:prefs:{id} (5min), catalog:product:{id} (1h)\n- pytest.ini fix: pythonpath = .\n- maxmemory-policy allkeys-lru recommendation\n\n## Source\n",
+      "source_links": [],
+      "tags": ["caching", "redis", "testing"],
+      "tokens_in": 600,
+      "tokens_out": 130,
+      "cost_usd": 0.0002
+    }
+  },
+  "with-secrets": {
+    "path_a": null,
+    "path_b": {
+      "title": "Session with environment variable and key setup",
+      "body": "## What happened\n- Reviewed environment variable configuration\n- Discussed API key and credential setup\n\n## Outputs\n- Configuration reviewed\n\n## Source\n",
+      "source_links": [],
+      "tags": ["configuration", "security"],
+      "tokens_in": 300,
+      "tokens_out": 60,
+      "cost_usd": 0.00008
+    }
+  },
+  "malformed-title": {
+    "path_a": {
+      "title": "Decision: Terraform|infra [[management]] #choice",
+      "type": "decision",
+      "body": "We decided to use Terraform for infrastructure management. Team HCL familiarity and existing org module registry were the deciding factors. Pulumi and CDK were rejected.",
+      "source_links": [],
+      "tags": ["terraform", "infra", "iac"],
+      "tokens_in": 300,
+      "tokens_out": 100,
+      "cost_usd": 0.002
+    },
+    "path_b": {
+      "title": "Terraform selection for IaC",
+      "body": "## What happened\n- Evaluated Terraform vs Pulumi vs CDK\n- Chose Terraform based on team familiarity and existing module registry\n\n## Outputs\n- Architecture decision: Terraform\n\n## Source\n",
+      "source_links": [],
+      "tags": ["terraform", "infra"],
+      "tokens_in": 300,
+      "tokens_out": 80,
+      "cost_usd": 0.00012
+    }
+  },
+  "malformed_haiku": {
+    "path_a": {
+      "title": "Decision: Use PostgreSQL",
+      "type": "decision",
+      "body": "Chose PostgreSQL for the project.",
+      "source_links": [],
+      "tags": ["database"],
+      "tokens_in": 200,
+      "tokens_out": 50,
+      "cost_usd": 0.001
+    },
+    "path_b": "this is not valid JSON for path_b — exercises malformed_json skip"
+  }
+}

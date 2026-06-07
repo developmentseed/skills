@@ -35,6 +35,13 @@
       "description": "Scaffold CI/CD, linting, and dependency automation for a Python project using GitHub Actions",
       "version": "1.0.1",
       "license": "MIT"
+    },
+    {
+      "name": "claude-vault-capture",
+      "source": "./skills/claude-vault-capture",
+      "description": "Automatically captures Claude Code sessions into an Obsidian vault on SessionEnd (scrub → summarize → write), plus a /vault-save skill for on-demand exports",
+      "version": "0.2.0",
+      "license": "MIT"
     }
   ]
 }
