@@ -1,0 +1,35 @@
+{
+  "name": "claude-vault-capture",
+  "description": "Automatically turns Claude Code sessions into curated Obsidian notes. On SessionEnd a backgrounded worker scrubs secrets, summarizes the session, and writes a decision/runbook/gotcha to your vault's Inbox/auto/. Includes the /vault-save skill for on-demand exports.",
+  "version": "0.2.0",
+  "author": { "name": "Loïc Houpert" },
+  "homepage": "https://github.com/lhoupert/claude-vault-capture",
+  "repository": "https://github.com/lhoupert/claude-vault-capture",
+  "license": "MIT",
+  "keywords": ["claude-code", "obsidian", "hooks", "knowledge-capture"],
+  "userConfig": {
+    "vault_dir": {
+      "type": "directory",
+      "title": "Obsidian vault path",
+      "description": "Absolute path to your Obsidian vault. Captures are written to <vault>/Inbox/auto/ and /vault-save exports to <vault>/claude-docs/.",
+      "required": true
+    },
+    "use_subscription": {
+      "type": "string",
+      "title": "Bill to Claude subscription",
+      "description": "Set to 1 to route model calls through the Claude Agent SDK and bill them to your Claude Pro/Max subscription instead of a metered API key. Requires the `claude` CLI and an OAuth token below. Leave blank to use ANTHROPIC_API_KEY."
+    },
+    "anthropic_api_key": {
+      "type": "string",
+      "title": "Anthropic API key",
+      "description": "API key for metered (default) mode. Leave blank if you set ANTHROPIC_API_KEY in your environment or are using subscription mode.",
+      "sensitive": true
+    },
+    "oauth_token": {
+      "type": "string",
+      "title": "Claude OAuth token (subscription mode)",
+      "description": "Long-lived token from `claude setup-token` (starts with sk-ant-oat01-…). Only needed when 'Bill to Claude subscription' is 1. Stored in your OS keychain.",
+      "sensitive": true
+    }
+  }
+}

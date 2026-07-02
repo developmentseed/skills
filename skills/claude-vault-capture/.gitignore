@@ -1,0 +1,9 @@
+# Runtime state (dedup index, per-session log, scrub-failure log). At plugin
+# runtime this lives under ${CLAUDE_PLUGIN_DATA}; this entry covers standalone/dev
+# checkouts where curate.py falls back to eval/state/.
+eval/state/
+
+# Dev artifacts
+.venv/
+__pycache__/
+*.pyc
