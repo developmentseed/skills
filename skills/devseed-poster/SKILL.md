@@ -33,17 +33,17 @@ The `.scale-wrap` div is 1978×1183px and uses `transform: scale()` via JS to fi
 
 ### Fonts (Google Fonts)
 ```
-DM Serif Display  — h1, h2, large numbers, italic emphasis
-DM Sans           — body text, descriptions
-DM Mono           — labels, captions, links, tags, code
+Roboto Condensed  — h1, h2, large numbers, italic emphasis
+Roboto            — body text, descriptions
+Roboto Mono       — labels, captions, links, tags, code
 ```
 
 ### Colour palette
 ```css
---accent: #E84B23   /* DevSeed orange — primary accent, borders, highlights */
+--accent: #CF3F02   /* DevSeed orange — primary accent, borders, highlights */
 --gnw:    #2a5c45   /* Forest green — Global Nature Watch / nature topics */
 --dede:   #1d4e8f   /* Deep blue — climate / ECMWF / data topics */
---ink:    #1a1614   /* Near-black body text */
+--ink:    #443F3F   /* Near-black body text */
 --mid:    #4a4440   /* Secondary text, lesson numbers, links, footer */
 --muted:  #9a9490   /* Captions only — avoid for anything that must print */
 --rule:   #dedad4   /* Dividers, card borders */
@@ -92,8 +92,8 @@ Cards use explicit `grid-column` and `grid-row` placement — each card can span
 ```html
 <div class="card">
   <div class="card-label">Section Label</div>   <!-- mono 10px all-caps + rule line -->
-  <h2>Card Title</h2>                           <!-- DM Serif 17px -->
-  <p>Body text...</p>                           <!-- DM Sans 12.5px / 1.57 lh -->
+  <h2>Card Title</h2>                           <!-- Roboto Condensed 17px -->
+  <p>Body text...</p>                           <!-- Roboto 12.5px / 1.57 lh -->
 </div>
 ```
 
@@ -136,7 +136,7 @@ Use this for any "system showcase" card — keeps screenshots fully visible with
 </div>
 ```
 ```css
-.lesson-num { font-family: 'DM Serif Display'; font-size: 26px;
+.lesson-num { font-family: 'Roboto Condensed'; font-size: 26px;
               color: var(--mid); /* NOT --rule — too faint for print */ }
 ```
 
@@ -152,7 +152,7 @@ Use this for any "system showcase" card — keeps screenshots fully visible with
 ```css
 .stat       { flex: 1; padding: 7px 9px; background: white;
               border-radius: 4px; border-top: 3px solid var(--accent); }
-.stat-value { font-family: 'DM Serif Display'; font-size: 24px; color: var(--accent); }
+.stat-value { font-family: 'Roboto Condensed'; font-size: 24px; color: var(--accent); }
 .stat-label { font-size: 10.5px; color: var(--mid); }
 ```
 
@@ -174,7 +174,7 @@ Use this for any "system showcase" card — keeps screenshots fully visible with
 <div class="card-link">github.com/org/repo</div>
 ```
 ```css
-.card-link { font-family: 'DM Mono'; font-size: 10px;
+.card-link { font-family: 'Roboto Mono'; font-size: 10px;
              color: var(--mid); margin-top: 4px; }
 ```
 
@@ -318,7 +318,7 @@ python3 << 'EOF'
 import urllib.request, base64, re
 
 ua = {'User-Agent': 'Mozilla/5.0'}
-url = 'https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=DM+Mono:wght@400;500&family=DM+Sans:wght@300;400;500;600&display=swap'
+url = 'https://fonts.googleapis.com/css2?family=Roboto+Condensed:ital,wght@0,300;0,400;0,500;0,600;1,300;1,400;1,500;1,600&family=Roboto+Mono:wght@400;500&family=Roboto:wght@300;400;500;600&display=swap'
 css = urllib.request.urlopen(urllib.request.Request(url, headers=ua)).read().decode()
 
 def inline(u):
@@ -329,7 +329,7 @@ inlined = re.sub(r'url\((https://fonts\.gstatic\.com/[^)]+)\)', lambda m: f'url(
 
 with open('poster.html') as f: html = f.read()
 html = html.replace(
-    "  @import url('https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=DM+Mono:wght@400;500&family=DM+Sans:wght@300;400;500;600&display=swap');",
+    "  @import url('https://fonts.googleapis.com/css2?family=Roboto+Condensed:ital,wght@0,300;0,400;0,500;0,600;1,300;1,400;1,500;1,600&family=Roboto+Mono:wght@400;500&family=Roboto:wght@300;400;500;600&display=swap');",
     inlined)
 with open('poster.html', 'w') as f: f.write(html)
 print(f"Done — {len(html)//1024} KB, fully self-contained")
