@@ -47,7 +47,7 @@ Roboto Mono       — labels, captions, links, tags, code
 --mid:    #4a4440   /* Secondary text, lesson numbers, links, footer */
 --muted:  #9a9490   /* Captions only — avoid for anything that must print */
 --rule:   #dedad4   /* Dividers, card borders */
---bg:     #f7f4ef   /* Warm off-white canvas background */
+--bg:     #ffffff   /* White background */
 ```
 
 **Print rule**: use `--mid` (#4a4440) for anything that must be readable on paper. `--muted` (#9a9490) is too light — reserve it for truly decorative/secondary text only.
