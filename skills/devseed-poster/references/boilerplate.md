@@ -9,15 +9,15 @@ Full starter HTML for a Development Seed conference poster. Replace all `FILL:` 
 <meta charset="UTF-8">
 <title>FILL: Poster title — Author et al. YEAR</title>
 <style>
-  @import url('https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=DM+Mono:wght@400;500&family=DM+Sans:wght@300;400;500;600&display=swap');
+  @import url('https://fonts.googleapis.com/css2?family=Roboto+Condensed:ital,wght@0,300;0,400;0,500;0,600;1,300;1,400;1,500;1,600&family=Roboto+Mono:wght@400;500&family=Roboto:wght@300;400;500;600&display=swap');
 
   :root {
-    --accent: #E84B23;
-    --ink:    #1a1614;
+    --accent: #CF3F02;
+    --ink:    #443F3F;
     --mid:    #4a4440;
     --muted:  #9a9490;
     --rule:   #dedad4;
-    --bg:     #f7f4ef;
+    --bg:     #ffffff;
     /* project-specific accent colours — add as needed */
     /* --gnw:  #2a5c45; */
     /* --dede: #1d4e8f; */
@@ -35,7 +35,7 @@ Full starter HTML for a Development Seed conference poster. Replace all `FILL:` 
     width: 1978px; height: 1183px;
     transform-origin: top center;
     background: var(--bg);
-    font-family: 'DM Sans', sans-serif;
+    font-family: 'Roboto', sans-serif;
     font-size: 14px; color: var(--ink);
     flex-shrink: 0;
   }
@@ -59,12 +59,12 @@ Full starter HTML for a Development Seed conference poster. Replace all `FILL:` 
     border-bottom: 3px solid var(--ink);
   }
   .session-tag {
-    font-family: 'DM Mono', monospace; font-size: 11px;
+    font-family: 'Roboto Mono', monospace; font-size: 11px;
     letter-spacing: .12em; text-transform: uppercase;
     color: var(--accent); margin-bottom: 8px;
   }
   h1 {
-    font-family: 'DM Serif Display', serif;
+    font-family: 'Roboto Condensed', serif;
     font-size: 34px; line-height: 1.08; max-width: 920px;
   }
   h1 em { font-style: italic; color: var(--accent); }
@@ -88,19 +88,19 @@ Full starter HTML for a Development Seed conference poster. Replace all `FILL:` 
   /* ── CARDS ── */
   .card { display: flex; flex-direction: column; gap: 6px; }
   .card-label {
-    font-family: 'DM Mono', monospace; font-size: 10px;
+    font-family: 'Roboto Mono', monospace; font-size: 10px;
     letter-spacing: .14em; text-transform: uppercase; color: var(--muted);
     display: flex; align-items: center; gap: 8px; flex-shrink: 0;
   }
   .card-label::after { content: ''; flex: 1; height: 1px; background: var(--rule); }
   .card h2 {
-    font-family: 'DM Serif Display', serif; font-size: 17px;
+    font-family: 'Roboto Condensed', serif; font-size: 17px;
     line-height: 1.18; flex-shrink: 0;
   }
   .card p { font-size: 12.5px; line-height: 1.57; color: var(--mid); }
   .card p strong { color: var(--ink); font-weight: 600; }
   .card-link {
-    font-family: 'DM Mono', monospace; font-size: 10px;
+    font-family: 'Roboto Mono', monospace; font-size: 10px;
     color: var(--mid); margin-top: 4px;
   }
   .accent-dot {
@@ -118,7 +118,7 @@ Full starter HTML for a Development Seed conference poster. Replace all `FILL:` 
   .lesson-list { display: flex; flex-direction: column; gap: 11px; margin-top: 2px; }
   .lesson { display: flex; gap: 9px; align-items: flex-start; }
   .lesson-num {
-    font-family: 'DM Serif Display', serif; font-size: 26px; line-height: 1;
+    font-family: 'Roboto Condensed', serif; font-size: 26px; line-height: 1;
     color: var(--mid); flex-shrink: 0; width: 24px; text-align: right;
   }
   .lesson-title { font-size: 12px; font-weight: 600; color: var(--ink); line-height: 1.2; margin-bottom: 1px; }
@@ -151,7 +151,7 @@ Full starter HTML for a Development Seed conference poster. Replace all `FILL:` 
     flex: 1; padding: 7px 9px; background: white;
     border-radius: 4px; border-top: 3px solid var(--accent);
   }
-  .stat-value { font-family: 'DM Serif Display', serif; font-size: 24px; color: var(--accent); }
+  .stat-value { font-family: 'Roboto Condensed', serif; font-size: 24px; color: var(--accent); }
   .stat-label { font-size: 10.5px; color: var(--mid); line-height: 1.3; margin-top: 2px; }
 
   /* ── FOOTER ── */
@@ -160,14 +160,14 @@ Full starter HTML for a Development Seed conference poster. Replace all `FILL:` 
     display: flex; align-items: flex-start; justify-content: space-between;
     border-top: 1.5px solid var(--rule); padding-top: 8px;
   }
-  .footer-meta { font-family: 'DM Mono', monospace; font-size: 10px; color: var(--mid); line-height: 1.65; }
+  .footer-meta { font-family: 'Roboto Mono', monospace; font-size: 10px; color: var(--mid); line-height: 1.65; }
   .footer-qr-zone { display: flex; gap: 18px; align-items: flex-start; }
   .qr-block { display: flex; flex-direction: column; align-items: center; gap: 2px; }
   .qr-block img { filter: invert(1) brightness(0.667) invert(1); }
-  .qr-label { font-family: 'DM Mono', monospace; font-size: 9px; color: var(--ink); font-weight: 500; }
+  .qr-label { font-family: 'Roboto Mono', monospace; font-size: 9px; color: var(--ink); font-weight: 500; }
   .photo-allowed {
     display: flex; align-items: center; gap: 6px;
-    font-size: 10px; font-family: 'DM Mono', monospace; color: var(--mid);
+    font-size: 10px; font-family: 'Roboto Mono', monospace; color: var(--mid);
   }
   .photo-icon {
     width: 30px; height: 30px; border: 1.5px solid var(--accent); border-radius: 4px;
