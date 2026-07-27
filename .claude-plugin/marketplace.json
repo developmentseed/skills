@@ -35,6 +35,13 @@
       "description": "Scaffold CI/CD, linting, and dependency automation for a Python project using GitHub Actions",
       "version": "1.0.1",
       "license": "MIT"
+    },
+    {
+      "name": "space-monkey",
+      "source": "./skills/space-monkey",
+      "description": "Sets up LLM-driven exploratory ('monkey') testing of a deployed web app via the space-monkey GitHub Action",
+      "version": "1.0.0",
+      "license": "MIT"
     }
   ]
 }

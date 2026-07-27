@@ -1,0 +1,5 @@
+{
+  "name": "space-monkey",
+  "description": "Sets up LLM-driven exploratory ('monkey') testing of a deployed web app via the space-monkey GitHub Action",
+  "version": "1.0.0"
+}
