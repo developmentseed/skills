@@ -170,7 +170,9 @@ class TestCredentialFallback:
         home = tmp_path / "home"
         home.mkdir()
         invocation = _build_home(home)
-        (home / ".claude_vault_oauth_token").write_text("DUMMY-OAUTH-TOKEN\n")
+        token = home / ".claude_vault_oauth_token"
+        token.write_text("DUMMY-OAUTH-TOKEN\n")
+        token.chmod(0o600)  # the hook refuses group/other-readable token files
 
         payload = json.dumps(
             {"session_id": "s1", "transcript_path": "/tmp/t.jsonl", "cwd": "/tmp"}
@@ -186,7 +188,9 @@ class TestCredentialFallback:
         home = tmp_path / "home"
         home.mkdir()
         invocation = _build_home(home)
-        (home / ".claude_vault_token").write_text("DUMMY-API-KEY\n")
+        token = home / ".claude_vault_token"
+        token.write_text("DUMMY-API-KEY\n")
+        token.chmod(0o600)  # the hook refuses group/other-readable token files
 
         payload = json.dumps(
             {"session_id": "s2", "transcript_path": "/tmp/t.jsonl", "cwd": "/tmp"}

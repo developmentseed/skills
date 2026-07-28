@@ -66,7 +66,14 @@ Generate a long-lived token in a normal terminal (it opens a browser):
 claude setup-token        # prints a token starting with sk-ant-oat01-…
 ```
 
-Paste it into the plugin's `oauth_token` config field (stored in your OS keychain), or write it to `~/.claude_vault_oauth_token`.
+Paste it into the plugin's `oauth_token` config field (stored in your OS keychain), or write it to `~/.claude_vault_oauth_token`. Token files must be owner-only — the hook refuses group/other-readable credential files:
+
+```bash
+(umask 077 && printf '%s\n' "sk-ant-oat01-…" > ~/.claude_vault_oauth_token)
+# or, for an existing file: chmod 600 ~/.claude_vault_oauth_token
+```
+
+The same applies to the API-key fallback file `~/.claude_vault_token`.
 
 **Trade-offs:** background captures draw from the *same* rolling rate limit as your interactive Claude Code usage, and `cost_usd` in the log becomes an *estimated* API-equivalent rather than a billed amount.
 

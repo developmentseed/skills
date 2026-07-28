@@ -11,6 +11,21 @@ set -euo pipefail
 
 HOOKS_LOG="$HOME/.claude/hooks.log"
 
+# Print a credential file's contents only if it is owner-only (mode *00); a
+# hand-made `echo $TOKEN > file` is 644, i.e. readable by every local user, and
+# must not be treated as a usable credential. stat -f is macOS/BSD, -c is GNU.
+_read_secret_file() {
+    local f="$1" perms
+    perms="$(stat -f '%Lp' "$f" 2>/dev/null || stat -c '%a' "$f" 2>/dev/null)" || return 1
+    if [[ "$perms" != *00 ]]; then
+        mkdir -p "$(dirname "$HOOKS_LOG")"
+        printf 'CAPTURE_TOKEN_FILE_PERMS\t%s\t%s is mode %s (group/other-readable) — refusing to use it; run: chmod 600 %s\n' \
+            "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$f" "$perms" "$f" >> "$HOOKS_LOG"
+        return 1
+    fi
+    cat "$f"
+}
+
 # Resolve the repo from this script's own location so the checkout can live anywhere.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(dirname "$SCRIPT_DIR")"
@@ -73,16 +88,17 @@ if [[ "${CAPTURE_USE_SUBSCRIPTION:-}" == "1" ]]; then
     # supplied via the sensitive oauth_token plugin config field).
     : "${CLAUDE_CODE_OAUTH_TOKEN:=${CLAUDE_PLUGIN_OPTION_OAUTH_TOKEN:-}}"
     if [[ -z "${CLAUDE_CODE_OAUTH_TOKEN:-}" && -f "$HOME/.claude_vault_oauth_token" ]]; then
-        # shellcheck disable=SC2155  # export masks cat's exit code on purpose — a
-        # token-read hiccup must not abort this close-path hook under `set -e`.
-        export CLAUDE_CODE_OAUTH_TOKEN="$(cat "$HOME/.claude_vault_oauth_token")"
+        # shellcheck disable=SC2155  # export masks the helper's exit code on purpose —
+        # a token-read failure (including bad perms) must not abort this close-path
+        # hook under `set -e`; it just leaves the token empty.
+        export CLAUDE_CODE_OAUTH_TOKEN="$(_read_secret_file "$HOME/.claude_vault_oauth_token")"
     fi
     export CLAUDE_CODE_OAUTH_TOKEN
 else
     : "${ANTHROPIC_API_KEY:=${CLAUDE_PLUGIN_OPTION_ANTHROPIC_API_KEY:-}}"
     if [[ -z "${ANTHROPIC_API_KEY:-}" && -f "$HOME/.claude_vault_token" ]]; then
         # shellcheck disable=SC2155  # see rationale above: don't abort the close path
-        export ANTHROPIC_API_KEY="$(cat "$HOME/.claude_vault_token")"
+        export ANTHROPIC_API_KEY="$(_read_secret_file "$HOME/.claude_vault_token")"
     fi
     export ANTHROPIC_API_KEY
 fi
@@ -97,11 +113,14 @@ printf 'SESSION_END_RECEIVED\t%s\t%s\n' "$SESSION_ID" "$(date -u +%Y-%m-%dT%H:%M
 if [[ -x "$VENV_PYTHON" ]]; then
     RUN=("$VENV_PYTHON" "$CURATE")
 elif command -v uv >/dev/null 2>&1; then
-    WITH=()
+    # Build RUN incrementally: expanding an empty array via "${ARR[@]}" is an
+    # "unbound variable" error under `set -u` on bash < 4.4, and macOS ships 3.2 —
+    # a single interpolated array here killed every marketplace-install capture.
+    RUN=(uv run --quiet)
     if [[ "${CAPTURE_USE_SUBSCRIPTION:-}" == "1" ]]; then
-        WITH=(--with "claude-agent-sdk==0.2.89")
+        RUN+=(--with "claude-agent-sdk==0.2.89")
     fi
-    RUN=(uv run --quiet "${WITH[@]}" "$CURATE")
+    RUN+=("$CURATE")
 else
     printf 'CAPTURE_NO_INTERPRETER\t%s\tneither %s nor uv found — install uv (https://docs.astral.sh/uv/)\n' \
         "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$VENV_PYTHON" >> "$HOOKS_LOG"
