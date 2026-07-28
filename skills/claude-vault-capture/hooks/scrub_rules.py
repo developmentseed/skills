@@ -13,9 +13,13 @@ RULES = [
     },
     {
         "name": "token_prefix",
+        # sk- consumes _ and - too: modern OpenAI keys are sk-proj-…/sk-svcacct-…,
+        # and a charset stopping at the first dash used to redact only the public
+        # "sk-proj" prefix while the whole key body stayed in clear.
         "pattern": (
             r"sk-ant-[A-Za-z0-9_\-]+"
-            r"|sk-[A-Za-z0-9]+"
+            r"|sk-[A-Za-z0-9_\-]{4,}"
+            r"|github_pat_[A-Za-z0-9_]+"
             r"|gh[pousr]_[A-Za-z0-9]+"
             r"|xox[baprs]-[0-9]+-[A-Za-z0-9\-]+"
             r"|AKIA[0-9A-Z]{16}"
@@ -31,14 +35,31 @@ RULES = [
     {
         "name": "env_var",
         # Only the value is replaced; key name is kept for context.
-        # [^\s#]+ means trailing comments survive intact.
-        # ^ anchored per-line via re.MULTILINE.
+        # Matches at line start OR after whitespace/quote/paren/colon — the
+        # transcript renderer prefixes first lines with '[USER]: ' and shells
+        # write 'export KEY=…', both of which a ^-only anchor silently missed.
+        # Quoted values are consumed whole so `KEY="two words"` cannot leak
+        # past the first space; the bare [^\s#]+ branch still leaves trailing
+        # comments intact.
         "pattern": (
-            r"^[ \t]*(?P<k>[A-Z][A-Z0-9_]*(?:KEY|TOKEN|SECRET|PASSWORD|PASS|PWD|CREDENTIAL|API)[A-Z0-9_]*)"
-            r"[ \t]*=[ \t]*(?P<v>[^\s#]+)"
+            r"(?:^|(?<=[\s:;\"'`(]))(?:export[ \t]+|set[ \t]+|env[ \t]+)?"
+            r"(?P<k>[A-Z][A-Z0-9_]*(?:KEY|TOKEN|SECRET|PASSWORD|PASS|PWD|CREDENTIAL|API)[A-Z0-9_]*)"
+            r"[ \t]*=[ \t]*(?P<v>\"[^\"\n]*\"|'[^'\n]*'|[^\s#]+)"
         ),
         "sentinel": "<redacted:env_var>",
         "replace_value_only": True,  # only group 'v' is replaced; 'k' is kept
+    },
+    {
+        "name": "aws_secret",
+        # ~/.aws/credentials uses lowercase keys and `=` or `:` — the env_var
+        # rule requires an UPPERCASE key, so the 40-char AWS secret (the half
+        # that actually grants access, unlike the AKIA id) escaped it.
+        "pattern": (
+            r"(?i)(?P<k>aws_secret_access_key|aws_session_token)"
+            r"[ \t]*[=:][ \t]*(?P<v>\"[^\"\n]*\"|'[^'\n]*'|[^\s#]+)"
+        ),
+        "sentinel": "<redacted:aws_secret>",
+        "replace_value_only": True,
     },
     {
         "name": "bearer",
