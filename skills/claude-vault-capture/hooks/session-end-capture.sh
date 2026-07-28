@@ -31,6 +31,11 @@ REPO="$(dirname "$SCRIPT_DIR")"
 CURATE="$REPO/hooks/curate.py"
 VENV_PYTHON="$REPO/.venv/bin/python3"
 
+# Every branch below may log; guarantee the destination and one coherent
+# timestamp up front (each $(date) is a fork — this is the <200ms close path).
+mkdir -p "$(dirname "$HOOKS_LOG")"
+NOW="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
 # Legacy/standalone config file (pre-plugin installs). Plugin installs instead
 # pass config through CLAUDE_PLUGIN_OPTION_* env vars (handled just below).
 if [[ -f "$REPO/capture.env" ]]; then
@@ -46,6 +51,21 @@ fi
 : "${CAPTURE_USE_SUBSCRIPTION:=${CLAUDE_PLUGIN_OPTION_USE_SUBSCRIPTION:-}}"
 export CAPTURE_VAULT_DIR CAPTURE_USE_SUBSCRIPTION
 
+# Timeout is exported only when set to a plain integer. curate.py reads it with
+# a *string* default — os.environ.get("CAPTURE_TIMEOUT_SECONDS", "30") — so an
+# empty or non-numeric value is a ValueError at import, i.e. a silent no-capture,
+# rather than a fallback to 30. Reject junk here and log it instead.
+: "${CAPTURE_TIMEOUT_SECONDS:=${CLAUDE_PLUGIN_OPTION_TIMEOUT_SECONDS:-}}"
+if [[ -n "${CAPTURE_TIMEOUT_SECONDS:-}" ]]; then
+    if [[ "$CAPTURE_TIMEOUT_SECONDS" =~ ^[0-9]+$ ]]; then
+        export CAPTURE_TIMEOUT_SECONDS
+    else
+        printf 'CAPTURE_BAD_TIMEOUT\t%s\ttimeout_seconds=%s is not an integer — using the 30s default\n' \
+            "$NOW" "$CAPTURE_TIMEOUT_SECONDS" >> "$HOOKS_LOG"
+        unset CAPTURE_TIMEOUT_SECONDS
+    fi
+fi
+
 # Runtime state (dedup index, per-session log, scrub-failure log): prefer the
 # plugin's persistent data dir, which survives plugin updates. Standalone use
 # falls back to the in-repo eval/state default baked into curate.py / scrub.py.
@@ -54,11 +74,6 @@ if [[ -n "${CLAUDE_PLUGIN_DATA:-}" ]]; then
     export SCRUB_FAILURES_PATH="$CLAUDE_PLUGIN_DATA/state/scrub-failures.md"
     mkdir -p "$CLAUDE_PLUGIN_DATA/state"
 fi
-
-# Every branch below may log; guarantee the destination and one coherent
-# timestamp up front (each $(date) is a fork — this is the <200ms close path).
-mkdir -p "$(dirname "$HOOKS_LOG")"
-NOW="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
 # Read hook JSON from stdin
 HOOK_JSON=$(cat)
@@ -109,17 +124,24 @@ fi
 # Ground-truth marker BEFORE backgrounding (pre-log crash gap detection)
 printf 'SESSION_END_RECEIVED\t%s\t%s\n' "$SESSION_ID" "$NOW" >> "$HOOKS_LOG"
 
-# Deploy-drift guard: the June–July timeout outage was a checkout stuck behind
-# origin/main, so the running code silently wasn't the merged code. Log the
-# running SHA every session and flag when the last-fetched origin/main is not
-# an ancestor of HEAD. Local-only git ops — never fetch on the close path.
-#
-# Standalone/dev only. An installed plugin can't drift this way (Claude Code
-# owns plugin updates, and $REPO resolves to the marketplace clone rather than
-# to this code), so there it would just spend 2-3 forks on the close path to
-# log an irrelevant SHA — or a constant "unknown" when the plugin root isn't a
-# git checkout at all. Plugin version is tracked in .claude-plugin/plugin.json.
-if [[ -z "${CLAUDE_PLUGIN_ROOT:-}" ]]; then
+# Deploy identity: the June–July timeout outage was a checkout stuck behind
+# origin/main, so the running code silently wasn't the merged code. Log which
+# version produced every capture so drift is visible in hooks.log. Exactly one
+# CAPTURE_DEPLOY line per session in either mode.
+if [[ -n "${CLAUDE_PLUGIN_ROOT:-}" ]]; then
+    # Installed plugin: the plugin version is the authoritative identity, and
+    # git would be actively misleading — $REPO is rarely a git root, and `git -C`
+    # walks UP, so it would describe whatever repo encloses the plugin (the
+    # marketplace clone, or an unrelated repo someone vendored it into) and
+    # compare against THAT repo's origin/main, reporting false STALE_DEPLOYs.
+    PLUGIN_VERSION="$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
+        "$REPO/.claude-plugin/plugin.json" 2>/dev/null | head -1)"
+    printf 'CAPTURE_DEPLOY\tv%s\tplugin\t%s\n' "${PLUGIN_VERSION:-unknown}" \
+        "$NOW" >> "$HOOKS_LOG"
+else
+    # Standalone/dev checkout: log the running SHA and flag when the last-fetched
+    # origin/main is not an ancestor of HEAD. Local-only git ops — never fetch on
+    # the close path.
     DEPLOY_SHA="$(git -C "$REPO" rev-parse --short HEAD 2>/dev/null || echo unknown)"
     DEPLOY_STATE="ok"
     if [[ "$DEPLOY_SHA" == "unknown" ]]; then

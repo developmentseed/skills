@@ -32,6 +32,10 @@ def _build_plugin(home: pathlib.Path) -> pathlib.Path:
     """
     plugin = home / "plugin-root"
     (plugin / "hooks").mkdir(parents=True)
+    (plugin / ".claude-plugin").mkdir(parents=True)
+    (plugin / ".claude-plugin" / "plugin.json").write_text(
+        '{\n  "name": "claude-vault-capture",\n  "version": "9.9.9"\n}\n'
+    )
     (plugin / "hooks" / "curate.py").write_text("# stub — never executed\n")
     shutil.copy(HOOK, plugin / "hooks" / "session-end-capture.sh")
 
@@ -47,6 +51,7 @@ def _build_plugin(home: pathlib.Path) -> pathlib.Path:
         'printf "CAPTURE_STATE_DIR=%s\\n" "${CAPTURE_STATE_DIR:-}" >> "$INV"\n'
         'printf "SCRUB_FAILURES_PATH=%s\\n" "${SCRUB_FAILURES_PATH:-}" >> "$INV"\n'
         'printf "CAPTURE_USE_SUBSCRIPTION=%s\\n" "${CAPTURE_USE_SUBSCRIPTION:-}" >> "$INV"\n'
+        'printf "CAPTURE_TIMEOUT_SECONDS=%s\\n" "${CAPTURE_TIMEOUT_SECONDS:-unset}" >> "$INV"\n'
         'printf "ANTHROPIC_API_KEY=%s\\n" "${ANTHROPIC_API_KEY:-}" >> "$INV"\n'
         'printf "CLAUDE_CODE_OAUTH_TOKEN=%s\\n" "${CLAUDE_CODE_OAUTH_TOKEN:-}" >> "$INV"\n'
         "exit 0\n"
@@ -165,6 +170,70 @@ class TestPluginConfigMapping:
         assert proc.returncode == 0, proc.stderr
         assert _wait_for(invocation)
         assert f"CAPTURE_VAULT_DIR={home / 'other'}" in invocation.read_text()
+
+
+class TestTimeoutOption:
+    """CAPTURE_TIMEOUT_SECONDS is the headline ported feature; plugin users can
+    only reach it through userConfig, and curate.py reads it with a *string*
+    default, so an empty or junk value would be a ValueError at import."""
+
+    def test_option_maps_to_env(self, tmp_path):
+        home = tmp_path / "home"
+        home.mkdir()
+        invocation = _build_plugin(home)
+
+        proc = _run_hook(home, extra_env={"CLAUDE_PLUGIN_OPTION_TIMEOUT_SECONDS": "120"})
+
+        assert proc.returncode == 0, proc.stderr
+        assert _wait_for(invocation)
+        assert "CAPTURE_TIMEOUT_SECONDS=120" in invocation.read_text()
+
+    def test_unset_option_leaves_env_unset_not_empty(self, tmp_path):
+        """An empty export would make int("") raise inside curate.py."""
+        home = tmp_path / "home"
+        home.mkdir()
+        invocation = _build_plugin(home)
+
+        proc = _run_hook(home)
+
+        assert proc.returncode == 0, proc.stderr
+        assert _wait_for(invocation)
+        assert "CAPTURE_TIMEOUT_SECONDS=unset" in invocation.read_text()
+
+    def test_non_numeric_option_is_rejected_and_logged(self, tmp_path):
+        home = tmp_path / "home"
+        home.mkdir()
+        invocation = _build_plugin(home)
+
+        proc = _run_hook(
+            home, extra_env={"CLAUDE_PLUGIN_OPTION_TIMEOUT_SECONDS": "2 minutes"}
+        )
+
+        assert proc.returncode == 0, proc.stderr
+        assert _wait_for(invocation), "junk config must not stop the capture"
+        assert "CAPTURE_TIMEOUT_SECONDS=unset" in invocation.read_text()
+        assert "CAPTURE_BAD_TIMEOUT" in (home / ".claude" / "hooks.log").read_text()
+
+
+class TestDeployIdentity:
+    def test_plugin_mode_logs_version_not_git_sha(self, tmp_path):
+        """git would describe whatever repo encloses the plugin dir, so plugin
+        installs log the plugin version instead — but still exactly one line."""
+        home = tmp_path / "home"
+        home.mkdir()
+        _build_plugin(home)
+
+        proc = _run_hook(home)
+
+        assert proc.returncode == 0, proc.stderr
+        lines = [
+            ln
+            for ln in (home / ".claude" / "hooks.log").read_text().splitlines()
+            if ln.startswith("CAPTURE_DEPLOY")
+        ]
+        assert len(lines) == 1, lines
+        assert "v9.9.9" in lines[0]
+        assert "plugin" in lines[0]
 
 
 class TestTokenFilePermissions:

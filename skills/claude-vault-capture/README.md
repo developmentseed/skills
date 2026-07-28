@@ -8,7 +8,7 @@ Nothing runs synchronously on session close (the hook returns in well under 200 
 
 ## What you get
 
-- **Automatic capture** — a `SessionEnd` hook curates one durable artifact per qualifying session (a decision, runbook, gotcha, or spec — or nothing, if the session was low-signal) into `<vault>/Inbox/auto/`, using Sonnet.
+- **Automatic capture** — a `SessionEnd` hook curates one durable artifact per qualifying session (a decision, runbook, gotcha, or spec — or nothing, if the session was low-signal) into `<vault>/Inbox/auto/`, using Sonnet. The curator sees the tool activity too — commands run, files touched, and error output — not just the conversation, so notes capture what actually happened rather than only what was said about it.
 - **`/vault-save` skill** — on-demand export of a Claude-generated document (spec, plan, ADR, runbook, note) to `<vault>/claude-docs/` with structured frontmatter, mid-session. Auto-triggers on phrases like "save this to my vault".
 
 ## Prerequisites
@@ -55,7 +55,8 @@ Set via the plugin config prompt (`/plugin` → configure), or override with env
 | `oauth_token` / `CLAUDE_CODE_OAUTH_TOKEN` | — | Subscription auth; falls back to `~/.claude_vault_oauth_token`. |
 | `CAPTURE_MAX_EST_TOKENS` | `50000` | Token ceiling before skipping (~200 KB transcript). |
 | `CAPTURE_EXCLUDED_COMMANDS` | — | Comma-separated slash commands whose sessions are not captured. |
-| `CAPTURE_TIMEOUT_SECONDS` | `30` | Hard wall on a single model call. Raise it for large sessions or slow links (subscription mode especially) — all model work is backgrounded, so a higher value never delays session close. |
+| `timeout_seconds` / `CAPTURE_TIMEOUT_SECONDS` | `30` | Hard wall on a single model call. Raise it for large sessions or slow links (subscription mode especially) — all model work is backgrounded, so a higher value never delays session close. |
+| `CAPTURE_STATE_DIR` | `${CLAUDE_PLUGIN_DATA}/state` | Where the dedup index and per-session log live. Set automatically for plugin installs. |
 | `CAPTURE_TOOL_CHARS_BUDGET` | `30000` | Character budget for the tool activity (commands, files touched) summarized alongside the conversation. |
 | `CAPTURE_SUCCESS_HEAD_CHARS` | `200` | How much of each successful tool result is kept when rendering that activity. |
 

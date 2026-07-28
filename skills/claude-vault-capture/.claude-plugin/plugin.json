@@ -14,6 +14,11 @@
       "description": "Absolute path to your Obsidian vault. Captures are written to <vault>/Inbox/auto/ and /vault-save exports to <vault>/claude-docs/.",
       "required": true
     },
+    "timeout_seconds": {
+      "type": "string",
+      "title": "Model call timeout (seconds)",
+      "description": "Hard wall on a single model call; leave blank for 30. Raise it if captures are being lost to timeouts on large sessions or in subscription mode — all model work is backgrounded, so a higher value never delays session close. Must be a whole number."
+    },
     "use_subscription": {
       "type": "string",
       "title": "Bill to Claude subscription",
