@@ -1,13 +1,13 @@
 # skills
 
-A [Claude Code plugin marketplace](https://docs.anthropic.com/en/docs/claude-code/plugins) for shared AI Skills by [Development Seed](https://developmentseed.org). Skills are written in plain language, not code. They package up domain knowledge and workflows so AI tools can follow them.
+A [Claude Code plugin marketplace](https://docs.anthropic.com/en/docs/claude-code/plugins) for shared AI Skills by [Development Seed](https://developmentseed.org). Most skills are written in plain language, not code — they package up domain knowledge and workflows so AI tools can follow them. The collection also hosts code-bearing plugins (marked below) that bundle hooks or scripts and only work through the plugin install.
 
 ## What's here
 
 - **[github-issue-to-markdown](skills/github-issue-to-markdown/)**: exports GitHub issues (including from private repos) to structured Markdown using the `gh` CLI
 - **[setup-python-repo](skills/setup-python-repo/)**: scaffolds CI/CD, linting, release automation, and dependency automation for uv-based Python repositories using GitHub Actions
 - **[veda-story-creator](skills/veda-story-creator/)**: generates [VEDA](https://www.earthdata.nasa.gov/dashboard) scrollytelling MDX stories with satellite data visualizations. Includes a dataset catalog, annotated examples, and lessons learned
-- **[claude-vault-capture](skills/claude-vault-capture/)**: a plugin (SessionEnd hook + `/vault-save` skill) that automatically captures Claude Code sessions into an Obsidian vault — scrubs secrets, summarizes, and writes curated notes. Adapted from [lhoupert/claude-vault-capture](https://github.com/lhoupert/claude-vault-capture) (MIT © Loïc Houpert)
+- **[claude-vault-capture](skills/claude-vault-capture/)** *(code-bearing plugin — Claude Code `/plugin install` only)*: a SessionEnd hook + `/vault-save` skill that automatically captures Claude Code sessions into an Obsidian vault — scrubs secrets, summarizes, and writes curated notes. Adapted from [lhoupert/claude-vault-capture](https://github.com/lhoupert/claude-vault-capture) (MIT © Loïc Houpert)
 
 Know of a useful Skill that lives in another repo? See **[EXTERNAL-SKILLS.md](EXTERNAL-SKILLS.md)**.
 
@@ -23,6 +23,8 @@ Skills use the SKILL.md format, which works across multiple AI tools.
 ```
 
 ### Manual install (any CLI tool)
+
+> **Not for code-bearing plugins.** `claude-vault-capture` only works via `/plugin install` above: its hook registration, config prompts, and data directory exist only in the Claude Code plugin runtime, and its skill lives nested at `skills/claude-vault-capture/skills/vault-save/` rather than at the folder root — copying or symlinking the whole folder installs nothing and drags in Python/tests. At most, symlink the nested `vault-save` folder to get just the on-demand export skill (without automatic capture).
 
 ```bash
 # Global (available in any project)

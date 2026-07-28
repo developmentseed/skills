@@ -14,8 +14,9 @@ Usage: curate.py <transcript_path> <session_id> <cwd>
 
 Runs the curation path (Path A, sonnet) — extracts a durable artifact or null,
 retrying once on a non-deterministic null — writes it to the Obsidian Inbox, and
-appends to the eval state log. (Path B, the Haiku raw baseline, was retired
-2026-06-04; see eval/experiments/FINDINGS.md.)
+appends to the eval state log. (The *_a naming survives from a retired A/B
+experiment — Path B, a Haiku raw baseline, lost and was removed upstream
+2026-06-04 — and is kept for log-schema compatibility.)
 
 All errors go to stderr / ~/.claude/hooks.log — never to the user's terminal.
 """
@@ -36,8 +37,8 @@ import subprocess
 CAPTURE_MAX_EST_TOKENS: int = int(os.environ.get("CAPTURE_MAX_EST_TOKENS", "50000"))
 
 # Slash commands whose sessions are NOT captured. Empty by default — the public
-# pipeline archives everything. An external extension sets CAPTURE_EXCLUDED_COMMANDS
-# in capture.env to skip capturing its own workflow sessions.
+# pipeline archives everything. Set CAPTURE_EXCLUDED_COMMANDS (env var or
+# capture.env) to skip capturing specific workflows' sessions.
 EXCLUDED_COMMANDS: list[str] = [
     c.strip()
     for c in os.environ.get("CAPTURE_EXCLUDED_COMMANDS", "").split(",")
@@ -56,10 +57,12 @@ STATE_DIR = pathlib.Path(
 )
 
 # The vault location is user-specific — there is no universal default. It is set via
-# the CAPTURE_VAULT_DIR env var, which install.sh writes into capture.env and the hook
-# sources before launching this script. The fallback below only applies when curate.py
-# is run by hand without config; session-end-capture.sh refuses to launch when the
-# vault is unconfigured, so the real hook path always provides an explicit value.
+# the CAPTURE_VAULT_DIR env var: plugin installs map it from the vault_dir plugin
+# config (CLAUDE_PLUGIN_OPTION_VAULT_DIR), standalone checkouts from a sourced
+# capture.env — both handled by session-end-capture.sh before launching this script.
+# The fallback below only applies when curate.py is run by hand without config;
+# the hook refuses to launch when the vault is unconfigured, so the real hook path
+# always provides an explicit value.
 VAULT_DIR = pathlib.Path(
     os.environ.get("CAPTURE_VAULT_DIR") or (pathlib.Path.home() / "Obsidian")
 )
