@@ -18,9 +18,8 @@ _read_secret_file() {
     local f="$1" perms
     perms="$(stat -f '%Lp' "$f" 2>/dev/null || stat -c '%a' "$f" 2>/dev/null)" || return 1
     if [[ "$perms" != *00 ]]; then
-        mkdir -p "$(dirname "$HOOKS_LOG")"
         printf 'CAPTURE_TOKEN_FILE_PERMS\t%s\t%s is mode %s (group/other-readable) — refusing to use it; run: chmod 600 %s\n' \
-            "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$f" "$perms" "$f" >> "$HOOKS_LOG"
+            "${NOW:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}" "$f" "$perms" "$f" >> "$HOOKS_LOG"
         return 1
     fi
     cat "$f"
@@ -56,6 +55,11 @@ if [[ -n "${CLAUDE_PLUGIN_DATA:-}" ]]; then
     mkdir -p "$CLAUDE_PLUGIN_DATA/state"
 fi
 
+# Every branch below may log; guarantee the destination and one coherent
+# timestamp up front (each $(date) is a fork — this is the <200ms close path).
+mkdir -p "$(dirname "$HOOKS_LOG")"
+NOW="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
 # Read hook JSON from stdin
 HOOK_JSON=$(cat)
 
@@ -73,9 +77,8 @@ fi
 # log a marker and exit cleanly. (Plugin users set this via /plugin config; the
 # vault_dir userConfig field is marked required, so this path is rare.)
 if [[ -z "${CAPTURE_VAULT_DIR:-}" ]]; then
-    mkdir -p "$(dirname "$HOOKS_LOG")"
     printf 'CAPTURE_NOT_CONFIGURED\t%s\tCAPTURE_VAULT_DIR unset — set vault_dir in plugin config\n' \
-        "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$HOOKS_LOG"
+        "$NOW" >> "$HOOKS_LOG"
     exit 0
 fi
 
@@ -104,8 +107,30 @@ else
 fi
 
 # Ground-truth marker BEFORE backgrounding (pre-log crash gap detection)
-mkdir -p "$(dirname "$HOOKS_LOG")"
-printf 'SESSION_END_RECEIVED\t%s\t%s\n' "$SESSION_ID" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$HOOKS_LOG"
+printf 'SESSION_END_RECEIVED\t%s\t%s\n' "$SESSION_ID" "$NOW" >> "$HOOKS_LOG"
+
+# Deploy-drift guard: the June–July timeout outage was a checkout stuck behind
+# origin/main, so the running code silently wasn't the merged code. Log the
+# running SHA every session and flag when the last-fetched origin/main is not
+# an ancestor of HEAD. Local-only git ops — never fetch on the close path.
+#
+# Standalone/dev only. An installed plugin can't drift this way (Claude Code
+# owns plugin updates, and $REPO resolves to the marketplace clone rather than
+# to this code), so there it would just spend 2-3 forks on the close path to
+# log an irrelevant SHA — or a constant "unknown" when the plugin root isn't a
+# git checkout at all. Plugin version is tracked in .claude-plugin/plugin.json.
+if [[ -z "${CLAUDE_PLUGIN_ROOT:-}" ]]; then
+    DEPLOY_SHA="$(git -C "$REPO" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+    DEPLOY_STATE="ok"
+    if [[ "$DEPLOY_SHA" == "unknown" ]]; then
+        DEPLOY_STATE="unknown"
+    elif git -C "$REPO" rev-parse --verify -q origin/main >/dev/null 2>&1 \
+        && ! git -C "$REPO" merge-base --is-ancestor origin/main HEAD 2>/dev/null; then
+        DEPLOY_STATE="STALE_DEPLOY(behind origin/main as last fetched)"
+    fi
+    printf 'CAPTURE_DEPLOY\t%s\t%s\t%s\n' "$DEPLOY_SHA" "$DEPLOY_STATE" \
+        "$NOW" >> "$HOOKS_LOG"
+fi
 
 # Choose the interpreter. A pre-built .venv (standalone/dev `uv sync`) wins; an
 # installed plugin has none, so fall back to `uv run` with the PEP 723 deps
@@ -123,7 +148,7 @@ elif command -v uv >/dev/null 2>&1; then
     RUN+=("$CURATE")
 else
     printf 'CAPTURE_NO_INTERPRETER\t%s\tneither %s nor uv found — install uv (https://docs.astral.sh/uv/)\n' \
-        "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$VENV_PYTHON" >> "$HOOKS_LOG"
+        "$NOW" "$VENV_PYTHON" >> "$HOOKS_LOG"
     exit 0
 fi
 

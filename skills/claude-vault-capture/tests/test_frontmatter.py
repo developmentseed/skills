@@ -1,10 +1,5 @@
 """Unit tests for frontmatter + filename (slug + sid8) + title sanitization."""
 
-import sys
-import pathlib
-
-sys.path.insert(0, str(pathlib.Path(__file__).parent.parent / "hooks"))
-
 import yaml
 from curate import (
     sanitize_title,

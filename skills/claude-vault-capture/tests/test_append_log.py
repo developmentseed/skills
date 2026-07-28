@@ -5,7 +5,7 @@ import pathlib
 import json
 import subprocess
 
-sys.path.insert(0, str(pathlib.Path(__file__).parent.parent / "hooks"))
+from conftest import read_log
 
 
 _HOOKS_DIR = str(pathlib.Path(__file__).parent.parent / "hooks")
@@ -42,10 +42,8 @@ class TestAppendLog:
         p1.wait(timeout=10)
         p2.wait(timeout=10)
 
-        lines = [line for line in log_file.read_text().splitlines() if line.strip()]
-        assert len(lines) == 2
-
-        parsed = [json.loads(line) for line in lines]
+        parsed = read_log(log_file)
+        assert len(parsed) == 2
         session_ids = {e["session_id"] for e in parsed}
         assert session_ids == {"aaa", "bbb"}
 
@@ -65,7 +63,4 @@ class TestAppendLog:
         log_file = tmp_path / "log.md"
         for i in range(5):
             append_log({"i": i}, log_path=log_file)
-        lines = [line for line in log_file.read_text().splitlines() if line.strip()]
-        assert len(lines) == 5
-        for line in lines:
-            json.loads(line)  # must not raise
+        assert len(read_log(log_file)) == 5  # every line parses

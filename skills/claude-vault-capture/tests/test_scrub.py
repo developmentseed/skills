@@ -1,10 +1,7 @@
 """Unit tests for hooks/scrub.py — scrubber rules + idempotency + MULTILINE + malformed-rule skip."""
 
-import sys
 import os
 import pathlib
-
-sys.path.insert(0, str(pathlib.Path(__file__).parent.parent / "hooks"))
 
 
 # ─────────────────────────── helpers ──────────────────────────────────────────
@@ -134,6 +131,17 @@ class TestEnvVar:
         out, counts = scrub(text)
         assert "SECRET_TOKEN" in out  # key is preserved
         assert "super_secret_value" not in out
+
+    def test_value_inside_key_preserves_key(self):
+        """The replacement is a regex template, so the pre-value span is
+        written back verbatim even when the value string reoccurs inside it.
+        Deliberate divergence from the pre-template group(0).replace behavior,
+        which mangled the key on inputs like this."""
+        from scrub import scrub
+
+        out, counts = scrub("PASSKEY=PASS")
+        assert out == "PASSKEY=<redacted:env_var>"
+        assert counts["env_var"] == 1
 
     def test_trailing_comment_not_captured(self):
         from scrub import scrub
@@ -344,7 +352,7 @@ class TestMalformedRule:
             {
                 "name": "bad_rule",
                 "pattern": r"(?P<bad>[",  # invalid regex
-                "sentinel": "<redacted:bad>",
+                "replacement": "<redacted:bad>",
             },
         )
         importlib.reload(scrub_mod)
@@ -355,6 +363,36 @@ class TestMalformedRule:
             assert (
                 out == text
             )  # original returned for bad rule portion; rest still runs
+        finally:
+            scrub_rules.RULES[:] = original_rules
+            importlib.reload(scrub_mod)
+            os.environ.pop("SCRUB_FAILURES_PATH", None)
+
+    def test_bad_template_skipped_no_exception(self, tmp_path):
+        """A rule whose PATTERN compiles but whose replacement template is
+        invalid must be skipped at compile time, not abort every scrub call:
+        templates are parsed eagerly on each subn, even with zero matches."""
+        import scrub_rules
+        import scrub as scrub_mod
+        import importlib
+
+        failures_file = tmp_path / "scrub-failures.md"
+        os.environ["SCRUB_FAILURES_PATH"] = str(failures_file)
+
+        original_rules = scrub_rules.RULES[:]
+        scrub_rules.RULES.insert(
+            0,
+            {
+                "name": "bad_template",
+                "pattern": r"(x)",
+                "replacement": r"\g<nosuchgroup>",
+            },
+        )
+        importlib.reload(scrub_mod)
+        try:
+            out, counts = scrub_mod.scrub("sk-ant-abc123 and x")
+            assert "sk-ant-abc123" not in out  # other rules still ran
+            assert "bad_template" in failures_file.read_text()
         finally:
             scrub_rules.RULES[:] = original_rules
             importlib.reload(scrub_mod)
@@ -375,7 +413,7 @@ class TestMalformedRule:
             {
                 "name": "bad_rule_log",
                 "pattern": r"[unclosed",
-                "sentinel": "<redacted:bad>",
+                "replacement": "<redacted:bad>",
             },
         )
         importlib.reload(scrub_mod)

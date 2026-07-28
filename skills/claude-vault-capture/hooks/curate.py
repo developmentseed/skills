@@ -34,7 +34,9 @@ import subprocess
 
 # ── constants ──────────────────────────────────────────────────────────────────
 
-CAPTURE_MAX_EST_TOKENS: int = int(os.environ.get("CAPTURE_MAX_EST_TOKENS", "50000"))
+# Default token ceiling; the env var of the same name overrides it at call time
+# (see is_above_token_limit), so this constant is the single home of the literal.
+CAPTURE_MAX_EST_TOKENS: int = 50000
 
 # Slash commands whose sessions are NOT captured. Empty by default — the public
 # pipeline archives everything. Set CAPTURE_EXCLUDED_COMMANDS (env var or
@@ -70,13 +72,13 @@ LOG_PATH = STATE_DIR / "log.md"
 INDEX_PATH = STATE_DIR / "session-index.tsv"
 HOOKS_LOG = pathlib.Path.home() / ".claude" / "hooks.log"
 
-MOCK_RESPONSES_PATH = (
-    pathlib.Path(__file__).parent.parent / "eval" / "fixtures" / "mock-responses.json"
-)
-
 MODEL_A = "claude-sonnet-4-6"
 MAX_TOKENS_A = 2000
-TIMEOUT_SECONDS = 30
+# Hard wall on a single model call. Overridable via CAPTURE_TIMEOUT_SECONDS for
+# environments with large sessions or slow links (e.g. subscription mode, where a
+# big transcript can take longer than the 30s default). All model work is
+# backgrounded off the SessionEnd close path, so a higher value never delays a session.
+TIMEOUT_SECONDS: int = int(os.environ.get("CAPTURE_TIMEOUT_SECONDS", "30"))
 # Path A nulls non-deterministically: the same transcript can return `null` on
 # one call and a real artifact on the next. Retry once on null to recover those
 # misses at zero precision cost (a genuinely empty session re-nulls). Retry
@@ -106,14 +108,11 @@ _MULTI_SPACE_RE = re.compile(r"\s+")
 
 def sanitize_title(title: str) -> str:
     """Strip chars unsafe in Obsidian wikilinks; collapse whitespace; truncate to 120."""
-    s = _BAD_CHARS_RE.sub(" ", title)
-    s = _MULTI_SPACE_RE.sub(" ", s)
-    s = s.strip()
-    return s[:120]
+    return sanitize_summary(title, max_len=120)
 
 
 def sanitize_summary(s: str, max_len: int = 140) -> str:
-    """Same rules as sanitize_title but with a 140-char cap by default."""
+    """Strip chars unsafe in Obsidian wikilinks; collapse whitespace; truncate."""
     s = _BAD_CHARS_RE.sub(" ", s)
     s = _MULTI_SPACE_RE.sub(" ", s)
     s = s.strip()
@@ -240,9 +239,11 @@ def render_frontmatter(
 def is_duplicate_session(
     session_id: str,
     *,
-    index_path: pathlib.Path = INDEX_PATH,
+    index_path: pathlib.Path | None = None,
 ) -> bool:
     """Return True if session_id already appears in the index TSV."""
+    if index_path is None:
+        index_path = INDEX_PATH
     if not index_path.exists():
         return False
     with open(index_path, encoding="utf-8") as fh:
@@ -267,13 +268,15 @@ def is_below_threshold(messages: list[dict]) -> bool:
 
 def uses_excluded_command(
     messages: list[dict],
-    excluded_commands: list[str] = EXCLUDED_COMMANDS,
+    excluded_commands: list[str] | None = None,
 ) -> bool:
     """Return True if any user turn invokes an excluded slash command.
 
     Matches only when the command appears at the start of a line (possibly
     preceded by whitespace), so mentions of the command in prose are ignored.
     """
+    if excluded_commands is None:
+        excluded_commands = EXCLUDED_COMMANDS
     patterns = [
         re.compile(r"(?m)^\s*" + re.escape(cmd) + r"(?:\s|$)")
         for cmd in excluded_commands
@@ -292,7 +295,7 @@ def uses_excluded_command(
 
 def is_above_token_limit(text: str) -> bool:
     """True if estimated token count exceeds CAPTURE_MAX_EST_TOKENS."""
-    limit = int(os.environ.get("CAPTURE_MAX_EST_TOKENS", "50000"))
+    limit = int(os.environ.get("CAPTURE_MAX_EST_TOKENS", str(CAPTURE_MAX_EST_TOKENS)))
     return len(text) // 4 > limit
 
 
@@ -321,12 +324,12 @@ def derive_project(cwd: str) -> str:
 def build_log_entry(
     *,
     session_id: str,
-    path_a: str | None,
     skip_reason_a: str | None,
-    tokens_in_a: int | None,
-    tokens_out_a: int | None,
-    cost_usd_a: float | None,
     redactions: dict[str, int],
+    path_a: str | None = None,
+    tokens_in_a: int | None = None,
+    tokens_out_a: int | None = None,
+    cost_usd_a: float | None = None,
 ) -> dict:
     now = datetime.datetime.now(datetime.timezone.utc)
     return {
@@ -348,8 +351,16 @@ def build_log_entry(
 # ── concurrent-safe append ────────────────────────────────────────────────────
 
 
-def append_log(entry: dict, *, log_path: pathlib.Path = LOG_PATH) -> None:
-    """Append one JSON line to log_path with cross-process flock + in-process lock."""
+def append_log(entry: dict, *, log_path: pathlib.Path | None = None) -> None:
+    """Append one JSON line to log_path with cross-process flock + in-process lock.
+
+    log_path resolves to the module-level LOG_PATH at call time (not frozen as a
+    default arg) so tests that monkeypatch curate.LOG_PATH are honored even for
+    call sites that don't thread an explicit path — main()'s transcript_missing
+    logging wrote 6 test rows into the live W30 log via the frozen default.
+    """
+    if log_path is None:
+        log_path = LOG_PATH
     line = json.dumps(entry) + "\n"
     with _STATE_LOCK:
         log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -360,14 +371,33 @@ def append_log(entry: dict, *, log_path: pathlib.Path = LOG_PATH) -> None:
             fcntl.flock(fh, fcntl.LOCK_UN)
 
 
+def _log_skip(
+    session_id: str,
+    reason: str,
+    redactions: dict[str, int],
+    *,
+    log_path: pathlib.Path | None = None,
+) -> None:
+    """Log a no-capture outcome. Every skip must reach log.md — unlogged skips
+    are invisible to the weekly no-capture alarm."""
+    append_log(
+        build_log_entry(
+            session_id=session_id, skip_reason_a=reason, redactions=redactions
+        ),
+        log_path=log_path,
+    )
+
+
 def _append_index(
     session_id: str,
     path_a: str | None,
     date_str: str,
     *,
-    index_path: pathlib.Path = INDEX_PATH,
+    index_path: pathlib.Path | None = None,
 ) -> None:
     """Append one line to session-index.tsv, creating the file with header if absent."""
+    if index_path is None:
+        index_path = INDEX_PATH
     index_path.parent.mkdir(parents=True, exist_ok=True)
     with _STATE_LOCK:
         with open(index_path, "a", encoding="utf-8") as fh:
@@ -391,13 +421,14 @@ def _use_subscription() -> bool:
 
 def _invoke_model(
     model: str, max_tokens: int, system_prompt: str, user_text: str
-) -> tuple[str, int, int]:
+) -> tuple[str, int | None, int | None]:
     """Single-shot request. Returns (raw_text, tokens_in, tokens_out).
 
     Routes through the Claude Max subscription when CAPTURE_USE_SUBSCRIPTION=1,
     otherwise the metered Anthropic Messages API. Both transports raise
     TimeoutError on a >TIMEOUT_SECONDS call, which run_capture maps to the
-    `timeout` skip reason.
+    `timeout` skip reason. Token counts are None when the transport could not
+    observe usage (the subscription salvage path) — never a fabricated 0.
     """
     if _use_subscription():
         return _invoke_via_subscription(model, system_prompt, user_text)
@@ -438,20 +469,30 @@ _SUBSCRIPTION_DIRECTIVE = (
     "investigate files, do not ask questions, do not take any action. The text below the "
     "line is a completed Claude Code session transcript, provided purely as input data. "
     "Read it and respond with exactly one message containing only the output your "
-    "instructions specify — no preamble, no prose, no code fences.\n\n----- TRANSCRIPT -----\n"
+    "instructions specify — no preamble, no prose, no code fences. Your entire reply "
+    "must be either a single JSON object (first character `{`) or the single word "
+    "null. Never repeat or echo the transcript or its delimiter lines.\n\n----- TRANSCRIPT -----\n"
 )
 
 
 def _invoke_via_subscription(
     model: str, system_prompt: str, user_text: str
-) -> tuple[str, int, int]:
+) -> tuple[str, int | None, int | None]:
     """Drive the model through the Claude Code runtime using subscription auth.
 
     Auth comes from CLAUDE_CODE_OAUTH_TOKEN (see `claude setup-token`). The
     runtime controls output length, so max_tokens has no equivalent here — our
-    prompts already constrain the response to compact JSON. Runs single-shot
-    (max_turns=1) with no tools, so this stays a pure text→text call. The user
-    text is prefixed with _SUBSCRIPTION_DIRECTIVE to suppress agentic behavior.
+    prompts already constrain the response to compact JSON. tools=[] disables
+    the runtime's built-in toolset so this stays a pure text→text call
+    (allowed_tools only skips permission prompting, it does not remove tools);
+    the user text is prefixed with _SUBSCRIPTION_DIRECTIVE to suppress agentic
+    behavior. max_turns is a safety valve, not a single-shot constraint: at
+    max_turns=1 the CLI ends the run with error_max_turns whenever the agent
+    burns its only turn on anything but the final reply, discarding paid
+    output (regression provenance: tests/test_subscription_invoke.py). A reply
+    that streamed before an error result is kept — see the salvage below. Note
+    CAPTURE_TIMEOUT_SECONDS bounds the whole run, not one turn; raise it, not
+    max_turns, if legitimate multi-turn recoveries start logging `timeout`.
     """
     import asyncio
     from claude_agent_sdk import (
@@ -464,42 +505,88 @@ def _invoke_via_subscription(
 
     prompt = _SUBSCRIPTION_DIRECTIVE + user_text
 
-    async def _run() -> tuple[str, int, int]:
+    async def _run() -> tuple[str, int | None, int | None]:
         options = ClaudeAgentOptions(
             system_prompt=system_prompt,
             model=model,
-            max_turns=1,
+            max_turns=4,
+            tools=[],
             allowed_tools=[],
         )
-        parts: list[str] = []
-        tokens_in = tokens_out = 0
-        async for message in query(prompt=prompt, options=options):
-            if isinstance(message, AssistantMessage):
-                for block in message.content:
-                    if isinstance(block, TextBlock):
-                        parts.append(block.text)
-            elif isinstance(message, ResultMessage):
-                usage = message.usage or {}
-                # The runtime serves most input from cache (its own ~22k-token harness
-                # system prompt dominates), so input_tokens alone is misleadingly tiny.
-                # Sum all three to reflect what the model actually processed. Note this
-                # makes subscription cost estimates non-comparable to API mode: they
-                # include Claude Code's harness overhead the subscription absorbs.
-                tokens_in = (
-                    (usage.get("input_tokens", 0) or 0)
-                    + (usage.get("cache_creation_input_tokens", 0) or 0)
-                    + (usage.get("cache_read_input_tokens", 0) or 0)
-                )
-                tokens_out = usage.get("output_tokens", 0) or 0
-        return "".join(parts).strip(), tokens_in, tokens_out
+        parts: list[str] = []  # every text block in stream order, for salvage
+        reply: list[str] = []  # text of the latest assistant message only
+        tokens_in: int | None = None
+        tokens_out: int | None = None
+        try:
+            async for message in query(prompt=prompt, options=options):
+                if isinstance(message, AssistantMessage):
+                    texts = [
+                        b.text for b in message.content if isinstance(b, TextBlock)
+                    ]
+                    parts.extend(texts)
+                    if texts:
+                        reply = texts
+                elif isinstance(message, ResultMessage):
+                    usage = message.usage or {}
+                    # The runtime serves most input from cache (its own ~22k-token harness
+                    # system prompt dominates), so input_tokens alone is misleadingly tiny.
+                    # Sum all three to reflect what the model actually processed. Note this
+                    # makes subscription cost estimates non-comparable to API mode: they
+                    # include Claude Code's harness overhead the subscription absorbs, and
+                    # a multi-turn run repeats the cache-read sum per turn, so this is an
+                    # upper-bound estimate.
+                    tokens_in = (
+                        (usage.get("input_tokens", 0) or 0)
+                        + (usage.get("cache_creation_input_tokens", 0) or 0)
+                        + (usage.get("cache_read_input_tokens", 0) or 0)
+                    )
+                    tokens_out = usage.get("output_tokens", 0) or 0
+        except Exception as exc:
+            # The CLI exits non-zero after an error result (e.g. error_max_turns)
+            # and the SDK surfaces that as an exception mid-iteration — after the
+            # reply text already streamed. Discarding it loses a paid, often-
+            # complete response. The terminal ResultMessage rarely arrives on
+            # this path, so tokens usually stay None (unknown, never a fake 0).
+            if not parts:
+                raise
+            _log_error(
+                f"SUBSCRIPTION_SALVAGE partial reply kept (usage "
+                f"{'captured' if tokens_out is not None else 'not captured'}) "
+                f"after: {exc}"
+            )
+            # Everything that streamed, in order: the downstream outermost-brace
+            # salvage in _call_path_a can dig JSON out of preamble+reply text.
+            return "".join(parts).strip(), tokens_in, tokens_out
+        # Only the latest assistant message is the reply. A multi-turn run may
+        # emit preamble text on early turns; concatenating it would turn an
+        # exact-match `null` reply into malformed_json downstream.
+        return "".join(reply).strip(), tokens_in, tokens_out
 
     # asyncio.TimeoutError is TimeoutError on 3.11+, so the existing
     # `except TimeoutError` in run_capture catches a stalled subscription call.
     return asyncio.run(asyncio.wait_for(_run(), timeout=TIMEOUT_SECONDS))
 
 
+def _salvage_object(raw: str) -> dict | None:
+    """Return the outermost {...} span of *raw* parsed as an object, else None."""
+    start, end = raw.find("{"), raw.rfind("}")
+    if start == -1 or end <= start:
+        return None
+    try:
+        salvaged = json.loads(raw[start : end + 1])
+    except json.JSONDecodeError:
+        return None
+    return salvaged if isinstance(salvaged, dict) else None
+
+
 def _call_path_a(scrubbed_text: str, prompts_dir: pathlib.Path) -> dict | None:
-    """Call claude-sonnet-4-6 with curation prompt. Returns artifact dict or None."""
+    """Call claude-sonnet-4-6 with the curation prompt.
+
+    Returns the artifact dict with usage keys (tokens_in/tokens_out/cost_usd)
+    merged in. A model null does NOT return None: it returns the usage dict
+    plus {"_null": True} so the spend still reaches the log. (Test doubles may
+    return bare None; run_capture accepts both null spellings.)
+    """
     if os.environ.get("CAPTURE_MOCK_SDK") == "1":
         raise RuntimeError(
             "CAPTURE_MOCK_SDK=1 but no mock injected — call monkeypatched version"
@@ -507,51 +594,69 @@ def _call_path_a(scrubbed_text: str, prompts_dir: pathlib.Path) -> dict | None:
 
     system_prompt = (prompts_dir / "curation-system-prompt.md").read_text()
 
-    # Sum tokens across attempts so a retry's cost is fully accounted for.
+    # Sum tokens across attempts so a retry's cost is fully accounted for. A
+    # salvaged subscription reply arrives with unknown usage (None); once any
+    # attempt's usage is lost the totals are unknown too, and the log gets
+    # null rather than an understated number.
     tokens_in = tokens_out = 0
+    usage_lost = False
+
+    def _usage() -> dict:
+        if usage_lost:
+            return {"tokens_in": None, "tokens_out": None, "cost_usd": None}
+        return {
+            "tokens_in": tokens_in,
+            "tokens_out": tokens_out,
+            # Under subscription this is an estimated API-equivalent cost, not billed.
+            "cost_usd": _estimate_cost_a(tokens_in, tokens_out),
+        }
+
     data: dict | None = None
     for _attempt in range(PATH_A_NULL_RETRIES + 1):
         text, tin, tout = _invoke_model(
             MODEL_A, MAX_TOKENS_A, system_prompt, scrubbed_text
         )
-        tokens_in += tin
-        tokens_out += tout
+        if tin is None or tout is None:
+            usage_lost = True
+        else:
+            tokens_in += tin
+            tokens_out += tout
         raw = _strip_fences(text)
         if raw.lower() == "null":
             data = None
             continue  # non-deterministic null — try once more, then give up
         try:
             data = json.loads(raw)
-        except json.JSONDecodeError as exc:
-            # Malformed JSON is not a null; don't retry it (keep the prior
-            # behavior). Attach accumulated usage for the caller's cost log.
-            _log_error(f"PATH_A malformed_json: {raw[:200]}")
-            exc.usage = {  # type: ignore[attr-defined]
-                "tokens_in": tokens_in,
-                "tokens_out": tokens_out,
-                "cost_usd": _estimate_cost_a(tokens_in, tokens_out),
-            }
-            raise
+            parsed_ok = True
+        except json.JSONDecodeError:
+            data = None
+            parsed_ok = False
+
+        if parsed_ok and data is None:
+            continue  # payload was a literal `null` — same as the raw "null" case
+
         if not isinstance(data, dict):
-            # Valid JSON that isn't an object (quoted "null", a list, a number)
-            # is malformed for our schema — route it down the malformed_json
-            # path with usage attached, not an AttributeError that loses both.
-            _log_error(f"PATH_A malformed_json (non-object): {raw[:200]}")
-            exc = json.JSONDecodeError("model returned non-object JSON", raw, 0)
-            exc.usage = {  # type: ignore[attr-defined]
-                "tokens_in": tokens_in,
-                "tokens_out": tokens_out,
-                "cost_usd": _estimate_cost_a(tokens_in, tokens_out),
-            }
+            # Two shapes land here and both may still carry the artifact: a hard
+            # parse failure (the subscription runtime sometimes echoes transcript
+            # delimiters or prefixes prose around otherwise-valid JSON — fences
+            # not at line start defeat _CODE_FENCE_RE), and valid JSON of the
+            # wrong type (a quoted "null", a list, a number). Salvage the
+            # outermost {...} span before declaring the response malformed — it
+            # was already paid for.
+            data = _salvage_object(raw)
+
+        if not isinstance(data, dict):
+            # Malformed JSON is not a null; don't retry it (keep the prior
+            # behavior). Attach accumulated usage so the caller's cost log stays
+            # accurate instead of losing it to an AttributeError downstream.
+            _log_error(f"PATH_A malformed_json: {raw[:200]}")
+            exc = json.JSONDecodeError("model returned unusable JSON", raw, 0)
+            exc.usage = _usage()  # type: ignore[attr-defined]
             raise exc
+
         break  # got an artifact
 
-    usage = {
-        "tokens_in": tokens_in,
-        "tokens_out": tokens_out,
-        # Under subscription this is an estimated API-equivalent cost, not billed.
-        "cost_usd": _estimate_cost_a(tokens_in, tokens_out),
-    }
+    usage = _usage()
     if data is None:
         return {**usage, "_null": True}
     data.update(usage)
@@ -606,6 +711,103 @@ def _write_artifact(
     path.write_text(content, encoding="utf-8")
 
 
+# ── transcript rendering for the model ───────────────────────────────────────
+
+_ROLE_MAP = {"user": "[USER]", "assistant": "[ASSISTANT]"}
+
+# Per-block render caps (chars). Bash commands and edit diffs are the high-signal,
+# low-volume parts; error results are kept near-whole; successful output is headed.
+_BASH_CMD_CAP = 300
+_EDIT_DIFF_CAP = 200
+_OTHER_INPUT_CAP = 120
+_ERROR_CAP = 600
+
+
+def _tool_result_text(block: dict) -> str:
+    """Flatten a tool_result's content (str or list of text blocks) to text."""
+    c = block.get("content", "")
+    if isinstance(c, list):
+        return "\n".join(
+            b.get("text", "")
+            for b in c
+            if isinstance(b, dict) and b.get("type") == "text"
+        )
+    return c if isinstance(c, str) else ""
+
+
+def _render_tool_use(block: dict) -> str:
+    """Render one tool_use block as a compact `[TOOL] …` line."""
+    name = block.get("name", "tool")
+    inp = block.get("input", {}) or {}
+    if name == "Bash":
+        return f"[TOOL] Bash: {str(inp.get('command', ''))[:_BASH_CMD_CAP]}"
+    if name in ("Edit", "MultiEdit"):
+        diff = f"{inp.get('old_string', '')} -> {inp.get('new_string', '')}"
+        return f"[TOOL] {name}: {inp.get('file_path', '')} | {diff[:_EDIT_DIFF_CAP]}"
+    if name == "Write":
+        body = str(inp.get("content", ""))[:_EDIT_DIFF_CAP]
+        return f"[TOOL] Write: {inp.get('file_path', '')} | {body}"
+    # Any other tool: name + a compact slice of its input for context.
+    return f"[TOOL] {name}: {json.dumps(inp, default=str)[:_OTHER_INPUT_CAP]}"
+
+
+def render_transcript(messages: list[dict]) -> str:
+    """Build the curator's input text from loaded messages.
+
+    Each message's text becomes `[ROLE]: <text>`. When raw content `blocks` are
+    present (list-form transcript lines), tool activity is surfaced too — this is
+    what the model never used to see:
+      - tool_use            → `[TOOL] <Name>: <command/diff/input>`
+      - tool_result success → `[OUT] <head>` (CAPTURE_SUCCESS_HEAD_CHARS; 0 = drop)
+      - tool_result error   → `[ERROR] <text>` (always kept, prioritised over budget)
+
+    Tool-derived chars accumulate against CAPTURE_TOOL_CHARS_BUDGET; once spent,
+    further tool_use / [OUT] lines are dropped (text and [ERROR] still emitted), so
+    the enriched transcript stays under the token guard on pathological runs. The
+    text-only `content` the filters read is untouched — only the model input grows.
+    """
+    budget = int(os.environ.get("CAPTURE_TOOL_CHARS_BUDGET", "30000"))
+    head = int(os.environ.get("CAPTURE_SUCCESS_HEAD_CHARS", "200"))
+    used = 0
+    lines: list[str] = []
+
+    for m in messages:
+        role = _ROLE_MAP.get(m.get("role", ""), "[UNKNOWN]")
+        blocks = m.get("blocks")
+        if not isinstance(blocks, list):
+            lines.append(f"{role}: {m.get('content', '')}")
+            continue
+
+        parts: list[str] = []
+        for b in blocks:
+            if not isinstance(b, dict):
+                continue
+            btype = b.get("type")
+            if btype == "text":
+                parts.append(b.get("text", ""))
+            elif btype == "tool_use":
+                rendered = _render_tool_use(b)
+                if used + len(rendered) <= budget:
+                    parts.append(rendered)
+                    used += len(rendered)
+            elif btype == "tool_result":
+                text = _tool_result_text(b).strip()
+                if not text:
+                    continue  # nothing to surface (e.g. image-only / empty result)
+                if b.get("is_error"):
+                    rendered = f"[ERROR] {text[:_ERROR_CAP]}"
+                    parts.append(rendered)  # errors always kept
+                    used += len(rendered)
+                elif head > 0 and used < budget:
+                    rendered = f"[OUT] {text[:head]}"
+                    parts.append(rendered)
+                    used += len(rendered)
+        parts = [p for p in parts if p]
+        lines.append(f"{role}: " + "\n".join(parts))
+
+    return "\n".join(lines)
+
+
 # ── main capture pipeline ─────────────────────────────────────────────────────
 
 
@@ -614,85 +816,47 @@ def run_capture(
     transcript: list[dict],
     session_id: str,
     cwd: str,
-    vault_dir: str | pathlib.Path = VAULT_DIR,
-    log_path: pathlib.Path = LOG_PATH,
-    index_path: pathlib.Path = INDEX_PATH,
+    vault_dir: str | pathlib.Path | None = None,
+    log_path: pathlib.Path | None = None,
+    index_path: pathlib.Path | None = None,
     date_str: str | None = None,
     prompts_dir: pathlib.Path | None = None,
 ) -> None:
     """Full capture pipeline: scrub → threshold → dedup → API calls → write → log."""
     import scrub as scrub_mod
 
+    if vault_dir is None:
+        vault_dir = VAULT_DIR
     vault_dir = pathlib.Path(vault_dir)
+    if log_path is None:
+        log_path = LOG_PATH
+    if index_path is None:
+        index_path = INDEX_PATH
     if prompts_dir is None:
-        prompts_dir = pathlib.Path(__file__).parent.parent / "prompts"
+        prompts_dir = REPO_ROOT / "prompts"
     if date_str is None:
         date_str = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
 
     # ── 1. scrub transcript ───────────────────────────────────────────────────
-    role_map = {"user": "[USER]", "assistant": "[ASSISTANT]"}
-    raw_text = "\n".join(
-        f"{role_map.get(m.get('role', ''), '[UNKNOWN]')}: {m.get('content', '')}"
-        for m in transcript
-    )
+    # render_transcript surfaces tool activity ([TOOL]/[OUT]/[ERROR]) for the model;
+    # scrub still runs on the full assembled text, so secrets in commands/output are
+    # redacted exactly as prose is.
+    raw_text = render_transcript(transcript)
     scrubbed_text, redactions = scrub_mod.scrub(raw_text)
 
-    # ── 2. excluded command check ─────────────────────────────────────────────
-    # Pass the module-level list explicitly (resolved at call time, not frozen as a
-    # default arg) so it reflects CAPTURE_EXCLUDED_COMMANDS and stays test-patchable.
-    if uses_excluded_command(transcript, EXCLUDED_COMMANDS):
-        entry = build_log_entry(
-            session_id=session_id,
-            path_a=None,
-            skip_reason_a="excluded_command",
-            tokens_in_a=None,
-            tokens_out_a=None,
-            cost_usd_a=None,
-            redactions=redactions,
-        )
-        append_log(entry, log_path=log_path)
-        return
-
-    # ── 3. threshold check ────────────────────────────────────────────────────
-    if is_below_threshold(transcript):
-        entry = build_log_entry(
-            session_id=session_id,
-            path_a=None,
-            skip_reason_a="threshold",
-            tokens_in_a=None,
-            tokens_out_a=None,
-            cost_usd_a=None,
-            redactions=redactions,
-        )
-        append_log(entry, log_path=log_path)
-        return
-
-    # ── 4. token-count guard ──────────────────────────────────────────────────
-    if is_above_token_limit(scrubbed_text):
-        entry = build_log_entry(
-            session_id=session_id,
-            path_a=None,
-            skip_reason_a="token_limit",
-            tokens_in_a=None,
-            tokens_out_a=None,
-            cost_usd_a=None,
-            redactions=redactions,
-        )
-        append_log(entry, log_path=log_path)
-        return
-
-    # ── 5. dedup check ────────────────────────────────────────────────────────
-    if is_duplicate_session(session_id, index_path=index_path):
-        entry = build_log_entry(
-            session_id=session_id,
-            path_a=None,
-            skip_reason_a="duplicate",
-            tokens_in_a=None,
-            tokens_out_a=None,
-            cost_usd_a=None,
-            redactions=redactions,
-        )
-        append_log(entry, log_path=log_path)
+    # ── 2–5. pre-flight skips (excluded command / threshold / tokens / dedup) ─
+    if uses_excluded_command(transcript):
+        skip = "excluded_command"
+    elif is_below_threshold(transcript):
+        skip = "threshold"
+    elif is_above_token_limit(scrubbed_text):
+        skip = "token_limit"
+    elif is_duplicate_session(session_id, index_path=index_path):
+        skip = "duplicate"
+    else:
+        skip = None
+    if skip:
+        _log_skip(session_id, skip, redactions, log_path=log_path)
         return
 
     # ── 6. project derivation ─────────────────────────────────────────────────
@@ -724,6 +888,9 @@ def run_capture(
         skip_reason_a = "timeout"
     except Exception as exc:
         skip_reason_a = f"error:{type(exc).__name__}"
+        # log.md keeps only the type name; without the message a bare SDK
+        # `Exception` (e.g. a control-request timeout) is undiagnosable.
+        _log_error(f"PATH_A {type(exc).__name__}: {exc}")
 
     # ── 8. scrub model output (title, body, tags, source_links) ──────────────
     if result_a:
@@ -808,14 +975,22 @@ def _load_transcript(transcript_path: str) -> list[dict]:
                 continue
             try:
                 obj = json.loads(line)
-                if obj.get("type") == "user" or obj.get("role") == "user":
-                    raw = obj.get("message", {}).get("content", obj.get("content", ""))
-                    messages.append({"role": "user", "content": _extract_text(raw)})
-                elif obj.get("type") == "assistant" or obj.get("role") == "assistant":
-                    raw = obj.get("message", {}).get("content", obj.get("content", ""))
-                    messages.append(
-                        {"role": "assistant", "content": _extract_text(raw)}
-                    )
+                for role in ("user", "assistant"):
+                    if obj.get("type") == role or obj.get("role") == role:
+                        raw = obj.get("message", {}).get(
+                            "content", obj.get("content", "")
+                        )
+                        messages.append(
+                            {
+                                "role": role,
+                                "content": _extract_text(raw),
+                                # Raw blocks travel alongside the text-only content
+                                # so render_transcript can surface tool activity to
+                                # the model while the filters keep reading content.
+                                "blocks": raw if isinstance(raw, list) else None,
+                            }
+                        )
+                        break
             except json.JSONDecodeError:
                 continue
     return messages
@@ -843,6 +1018,13 @@ def main():
         transcript = _load_transcript(transcript_path)
     except Exception as exc:
         _log_error(f"Failed to load transcript {transcript_path!r}: {exc}")
+        # Must still be visible in log.md: exiting before any entry made these
+        # sessions invisible to the weekly no-capture alarm (15 unlogged
+        # losses in W28 alone). Never let the logging itself fail the hook.
+        try:
+            _log_skip(session_id, "transcript_missing", {})
+        except Exception as log_exc:
+            _log_error(f"Failed to log transcript_missing: {log_exc}")
         sys.exit(0)
 
     try:

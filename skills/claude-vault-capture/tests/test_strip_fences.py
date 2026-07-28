@@ -1,10 +1,7 @@
 """Tests for _strip_fences and token capture on failure paths."""
 
-import sys
-import pathlib
 import json
 
-sys.path.insert(0, str(pathlib.Path(__file__).parent.parent / "hooks"))
 
 from curate import _strip_fences
 

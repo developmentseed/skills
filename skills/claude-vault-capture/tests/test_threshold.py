@@ -3,11 +3,6 @@
 Threshold: < 3 user turns OR < 1500 chars of user content → skip (OR logic).
 """
 
-import sys
-import pathlib
-
-sys.path.insert(0, str(pathlib.Path(__file__).parent.parent / "hooks"))
-
 from curate import is_below_threshold
 
 

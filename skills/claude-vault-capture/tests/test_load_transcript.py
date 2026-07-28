@@ -1,10 +1,8 @@
 """Tests for _load_transcript and _extract_text — covers list content blocks."""
 
 import json
-import pathlib
 import sys
 
-sys.path.insert(0, str(pathlib.Path(__file__).parent.parent / "hooks"))
 
 from curate import _extract_text, _load_transcript
 
@@ -61,9 +59,10 @@ class TestLoadTranscript:
             ],
         )
         msgs = _load_transcript(path)
+        # Plain-string content carries no raw blocks (blocks is None).
         assert msgs == [
-            {"role": "user", "content": "hello"},
-            {"role": "assistant", "content": "world"},
+            {"role": "user", "content": "hello", "blocks": None},
+            {"role": "assistant", "content": "world", "blocks": None},
         ]
 
     def test_list_content_blocks(self, tmp_path):
@@ -96,8 +95,19 @@ class TestLoadTranscript:
             ],
         )
         msgs = _load_transcript(path)
-        assert msgs[0] == {"role": "user", "content": "run a command"}
-        assert msgs[1] == {"role": "assistant", "content": "sure"}
+        # content is text-only; the raw blocks ride along for render_transcript.
+        assert msgs[0]["role"] == "user"
+        assert msgs[0]["content"] == "run a command"
+        assert msgs[1]["content"] == "sure"
+        assert msgs[1]["blocks"] == [
+            {"type": "text", "text": "sure"},
+            {
+                "type": "tool_use",
+                "id": "t1",
+                "name": "Bash",
+                "input": {"command": "ls"},
+            },
+        ]
 
     def test_skips_blank_lines_and_invalid_json(self, tmp_path):
         p = tmp_path / "transcript.jsonl"
@@ -138,3 +148,38 @@ class TestLoadTranscript:
         msgs = _load_transcript(path)
         assert msgs[0]["content"] == "plain string"
         assert msgs[1]["content"] == "list block"
+
+
+class TestTranscriptMissingIsLogged:
+    """A missing/unreadable transcript must produce a log.md entry, not a silent
+    exit-0 — these sessions were invisible to the weekly no-capture alarm
+    (15 unlogged losses in W28 alone)."""
+
+    def test_missing_transcript_logs_skip_entry(self, tmp_path, monkeypatch):
+        import curate
+        import pytest
+
+        entries = []
+        monkeypatch.setattr(
+            curate, "append_log", lambda entry, **kw: entries.append(entry)
+        )
+        monkeypatch.setenv("CAPTURE_MOCK_SDK", "1")  # bypass the credential guard
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            [
+                "curate.py",
+                str(tmp_path / "does-not-exist.jsonl"),
+                "sid-missing",
+                "/tmp",
+            ],
+        )
+
+        with pytest.raises(SystemExit) as e:
+            curate.main()
+
+        assert e.value.code == 0  # still exits cleanly — the hook must never fail
+        assert entries, "no log entry written for the missing transcript"
+        assert entries[-1]["skip_reason_a"] == "transcript_missing"
+        assert entries[-1]["session_id"] == "sid-missing"
+        assert entries[-1]["path_a"] is None

@@ -6,13 +6,14 @@ it and a timed-out call was mislabeled `error:APITimeoutError` instead of the
 documented `timeout` skip reason. _invoke_via_api_key now normalizes it.
 """
 
-import json
+import importlib
 
 import anthropic
 import httpx
 import pytest
 
 import curate
+from conftest import read_log
 
 
 def _timeout_client(*args, **kwargs):
@@ -42,6 +43,28 @@ def _above_threshold_transcript():
     ]
 
 
+def test_timeout_seconds_defaults_to_30(monkeypatch):
+    """With no override set, the call timeout is the documented 30s default."""
+    monkeypatch.delenv("CAPTURE_TIMEOUT_SECONDS", raising=False)
+    try:
+        importlib.reload(curate)
+        assert curate.TIMEOUT_SECONDS == 30
+    finally:
+        importlib.reload(curate)
+
+
+def test_timeout_seconds_env_override(monkeypatch):
+    """CAPTURE_TIMEOUT_SECONDS overrides the default at module load."""
+    monkeypatch.setenv("CAPTURE_TIMEOUT_SECONDS", "90")
+    try:
+        importlib.reload(curate)
+        assert curate.TIMEOUT_SECONDS == 90
+    finally:
+        # Restore the module to default-env state for the rest of the session.
+        monkeypatch.delenv("CAPTURE_TIMEOUT_SECONDS", raising=False)
+        importlib.reload(curate)
+
+
 def test_api_timeout_normalized_to_builtin(monkeypatch):
     monkeypatch.setattr(anthropic, "Anthropic", _timeout_client)
     with pytest.raises(TimeoutError):
@@ -62,10 +85,6 @@ def test_run_capture_maps_api_timeout_to_skip_reason(monkeypatch, temp_vault):
         index_path=temp_vault.index_path,
     )
 
-    entries = [
-        json.loads(line)
-        for line in temp_vault.log_path.read_text().splitlines()
-        if line.strip()
-    ]
+    entries = read_log(temp_vault.log_path)
     assert len(entries) == 1
     assert entries[0]["skip_reason_a"] == "timeout"

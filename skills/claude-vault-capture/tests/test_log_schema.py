@@ -4,11 +4,8 @@ Single-path schema (v2): Path B was retired 2026-06-04, so every entry has
 exactly one path_a/skip_reason_a pair.
 """
 
-import sys
-import pathlib
 import json
 
-sys.path.insert(0, str(pathlib.Path(__file__).parent.parent / "hooks"))
 
 from curate import build_log_entry, LOG_REQUIRED_KEYS
 

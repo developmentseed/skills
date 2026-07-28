@@ -1,10 +1,5 @@
 """Unit tests for dedup — session_id lookup against session-index.tsv."""
 
-import sys
-import pathlib
-
-sys.path.insert(0, str(pathlib.Path(__file__).parent.parent / "hooks"))
-
 from curate import is_duplicate_session
 
 

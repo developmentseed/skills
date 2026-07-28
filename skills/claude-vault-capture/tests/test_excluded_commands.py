@@ -5,11 +5,6 @@ everything); extensions populate it via CAPTURE_EXCLUDED_COMMANDS. These tests
 exercise the matching *mechanism* by passing the command list explicitly.
 """
 
-import sys
-import pathlib
-
-sys.path.insert(0, str(pathlib.Path(__file__).parent.parent / "hooks"))
-
 from curate import uses_excluded_command, EXCLUDED_COMMANDS
 
 # A sample list an external triage extension would configure via CAPTURE_EXCLUDED_COMMANDS.

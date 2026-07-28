@@ -4,7 +4,7 @@ Automatically turn your [Claude Code](https://claude.com/claude-code) sessions i
 
 Nothing runs synchronously on session close (the hook returns in well under 200 ms); all model work is backgrounded. Secrets are scrubbed before anything is sent to a model and again before anything is written to disk.
 
-> **Provenance.** This plugin is adapted from [**lhoupert/claude-vault-capture**](https://github.com/lhoupert/claude-vault-capture) by **Loïc Houpert**, MIT-licensed (see [`LICENSE`](LICENSE)). It has been repackaged here as a Claude Code marketplace plugin: the standalone `install.sh` is replaced by the plugin's hook registration + `userConfig`, and the worker now runs via `uv run` (PEP 723 inline deps) so no separate `uv sync` step is needed. Original authorship is preserved in this repository's commit history.
+> **Provenance.** This plugin is adapted from [**developmentseed/claude-vault-capture**](https://github.com/developmentseed/claude-vault-capture) by **Loïc Houpert**, MIT-licensed (see [`LICENSE`](LICENSE)). It has been repackaged here as a Claude Code marketplace plugin: the standalone `install.sh` is replaced by the plugin's hook registration + `userConfig`, and the worker now runs via `uv run` (PEP 723 inline deps) so no separate `uv sync` step is needed. Original authorship is preserved in this repository's commit history.
 
 ## What you get
 
@@ -55,6 +55,9 @@ Set via the plugin config prompt (`/plugin` → configure), or override with env
 | `oauth_token` / `CLAUDE_CODE_OAUTH_TOKEN` | — | Subscription auth; falls back to `~/.claude_vault_oauth_token`. |
 | `CAPTURE_MAX_EST_TOKENS` | `50000` | Token ceiling before skipping (~200 KB transcript). |
 | `CAPTURE_EXCLUDED_COMMANDS` | — | Comma-separated slash commands whose sessions are not captured. |
+| `CAPTURE_TIMEOUT_SECONDS` | `30` | Hard wall on a single model call. Raise it for large sessions or slow links (subscription mode especially) — all model work is backgrounded, so a higher value never delays session close. |
+| `CAPTURE_TOOL_CHARS_BUDGET` | `30000` | Character budget for the tool activity (commands, files touched) summarized alongside the conversation. |
+| `CAPTURE_SUCCESS_HEAD_CHARS` | `200` | How much of each successful tool result is kept when rendering that activity. |
 
 ### Subscription mode
 

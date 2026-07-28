@@ -6,11 +6,9 @@ preserved even when JSON parsing fails or the model returns null.
 Uses CAPTURE_MOCK_SDK=1 with a mock entry that raises.
 """
 
-import sys
-import pathlib
 import json
 
-sys.path.insert(0, str(pathlib.Path(__file__).parent.parent / "hooks"))
+from conftest import read_log
 
 
 def _make_transcript(n_turns=3, chars=600) -> list[dict]:
@@ -41,8 +39,7 @@ def _run_with_mock_a(tmp_path, monkeypatch, mock_a, sid="test-session"):
         index_path=index_file,
         date_str="2026-05-10",
     )
-    log_lines = [line for line in log_file.read_text().splitlines() if line.strip()]
-    return json.loads(log_lines[-1]), inbox_auto
+    return read_log(log_file)[-1], inbox_auto
 
 
 class TestFailureHandling:
@@ -116,6 +113,23 @@ class TestTokenCaptureOnFailure:
         assert entry["tokens_in_a"] == 800
         assert entry["tokens_out_a"] == 60
         assert entry["cost_usd_a"] == 0.0003
+
+    def test_generic_error_logs_exception_message(self, tmp_path, monkeypatch):
+        """error:<Type> skips must also log the exception *message* — a bare type
+        name (e.g. the SDK's literal `Exception`) is undiagnosable from log.md."""
+        import curate
+
+        recorded = []
+        monkeypatch.setattr(curate, "_log_error", lambda msg: recorded.append(msg))
+
+        def mock_a_sdk_error(*a, **kw):
+            raise Exception("Control request timeout: initialize")
+
+        entry, _ = _run_with_mock_a(
+            tmp_path, monkeypatch, mock_a=mock_a_sdk_error, sid="test-error-message"
+        )
+        assert entry["skip_reason_a"] == "error:Exception"
+        assert any("Control request timeout: initialize" in m for m in recorded)
 
     def test_malformed_json_without_usage_attr(self, tmp_path, monkeypatch):
         """Graceful fallback when exc.usage is absent."""

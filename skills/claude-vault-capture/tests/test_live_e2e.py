@@ -12,13 +12,12 @@ usage — a regression guard for the cache-token summation in
 _invoke_via_subscription.
 """
 
-import json
 import os
 import pathlib
 
 import pytest
 
-from conftest import parse_frontmatter
+from conftest import parse_frontmatter, read_log
 
 TRANSCRIPTS = pathlib.Path(__file__).parent.parent / "eval" / "fixtures" / "transcripts"
 
@@ -65,9 +64,7 @@ def test_subscription_pipeline_writes_artifact(tmp_path, monkeypatch):
     fm_a = parse_frontmatter(auto[0].read_text())
     assert fm_a["source"] == "claude-code-curated"
 
-    entry = json.loads(
-        [line for line in log_path.read_text().splitlines() if line.strip()][-1]
-    )
+    entry = read_log(log_path)[-1]
     assert entry["skip_reason_a"] is None
     # cache-token summation guard: subscription usage must be populated, non-trivial
     assert entry["tokens_in_a"] and entry["tokens_in_a"] > 100

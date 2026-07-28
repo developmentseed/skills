@@ -201,3 +201,100 @@ class TestCredentialFallback:
         assert _wait_for(invocation)
         record = invocation.read_text()
         assert "ANTHROPIC_API_KEY=DUMMY-API-KEY" in record
+
+
+class TestDeployGuard:
+    """The June/July outage was a checkout stuck behind origin/main — the hook
+    now logs the running SHA per session and flags a stale deploy, so drift is
+    visible in hooks.log instead of silent."""
+
+    def _payload(self, sid="sess-deploy"):
+        return json.dumps(
+            {
+                "session_id": sid,
+                "transcript_path": "/tmp/transcript.jsonl",
+                "cwd": "/tmp/project",
+            }
+        )
+
+    def test_non_git_repo_logs_unknown_and_still_backgrounds(self, tmp_path):
+        home = tmp_path / "home"
+        home.mkdir()
+        invocation = _build_home(home)  # fake repo is not a git checkout
+
+        proc, _ = _run_hook(home, self._payload())
+
+        assert proc.returncode == 0
+        hooks_log = (home / ".claude" / "hooks.log").read_text()
+        deploy_lines = [
+            line for line in hooks_log.splitlines() if line.startswith("CAPTURE_DEPLOY")
+        ]
+        assert deploy_lines, "no CAPTURE_DEPLOY line written"
+        assert "unknown" in deploy_lines[0]
+        assert _wait_for(invocation), "guard must not block the capture itself"
+
+    def _git(self, repo, *args):
+        return subprocess.run(
+            ["git", "-C", str(repo), *args],
+            capture_output=True,
+            text=True,
+            check=True,
+            env={
+                "PATH": os.environ.get("PATH", ""),
+                "GIT_AUTHOR_NAME": "t",
+                "GIT_AUTHOR_EMAIL": "t@t",
+                "GIT_COMMITTER_NAME": "t",
+                "GIT_COMMITTER_EMAIL": "t@t",
+                "HOME": str(repo),  # ignore user gitconfig
+            },
+        )
+
+    def test_stale_deploy_is_flagged(self, tmp_path):
+        home = tmp_path / "home"
+        home.mkdir()
+        _build_home(home)
+        repo = home / "DevDS" / "claude-vault-capture"
+
+        # Two commits; origin/main at the newer one, HEAD detached on the older
+        # → HEAD is missing commits from origin/main → stale.
+        self._git(repo, "init", "-q")
+        self._git(repo, "add", "-A")
+        self._git(repo, "commit", "-qm", "c1")
+        c1 = self._git(repo, "rev-parse", "HEAD").stdout.strip()
+        (repo / "f").write_text("x")
+        self._git(repo, "add", "f")
+        self._git(repo, "commit", "-qm", "c2")
+        c2 = self._git(repo, "rev-parse", "HEAD").stdout.strip()
+        self._git(repo, "update-ref", "refs/remotes/origin/main", c2)
+        self._git(repo, "checkout", "-q", c1)
+
+        proc, _ = _run_hook(home, self._payload("sess-stale"))
+
+        assert proc.returncode == 0
+        hooks_log = (home / ".claude" / "hooks.log").read_text()
+        deploy_lines = [
+            line for line in hooks_log.splitlines() if line.startswith("CAPTURE_DEPLOY")
+        ]
+        assert deploy_lines and "STALE_DEPLOY" in deploy_lines[0]
+
+    def test_current_deploy_is_ok(self, tmp_path):
+        home = tmp_path / "home"
+        home.mkdir()
+        _build_home(home)
+        repo = home / "DevDS" / "claude-vault-capture"
+
+        self._git(repo, "init", "-q")
+        self._git(repo, "add", "-A")
+        self._git(repo, "commit", "-qm", "c1")
+        head = self._git(repo, "rev-parse", "HEAD").stdout.strip()
+        self._git(repo, "update-ref", "refs/remotes/origin/main", head)
+
+        proc, _ = _run_hook(home, self._payload("sess-ok"))
+
+        assert proc.returncode == 0
+        hooks_log = (home / ".claude" / "hooks.log").read_text()
+        deploy_lines = [
+            line for line in hooks_log.splitlines() if line.startswith("CAPTURE_DEPLOY")
+        ]
+        assert deploy_lines and "\tok\t" in deploy_lines[0]
+        assert "STALE_DEPLOY" not in deploy_lines[0]
