@@ -117,6 +117,26 @@ def sanitize_summary(s: str, max_len: int = 140) -> str:
     return s[:max_len]
 
 
+# Model-supplied frontmatter fields are hostile input (the transcript can carry
+# prompt injection): `type` is allowlisted, tags are collapsed to inert slugs.
+_ALLOWED_TYPES = {"decision", "runbook", "gotcha", "spec"}
+_TAG_BAD_RE = re.compile(r"[^a-z0-9-]+")
+
+
+def sanitize_type(fm_type) -> str:
+    """Collapse anything off the artifact-type allowlist to 'decision'."""
+    # isinstance guard: an unhashable model value (list/dict) must not raise
+    return fm_type if isinstance(fm_type, str) and fm_type in _ALLOWED_TYPES else "decision"
+
+
+def sanitize_tag(tag) -> str:
+    """Coerce a model-supplied tag to a [a-z0-9-] slug (max 40 chars, may be '')."""
+    s = unicodedata.normalize("NFKD", str(tag))
+    s = s.encode("ascii", "ignore").decode("ascii").lower()
+    s = _TAG_BAD_RE.sub("-", s)
+    return s.strip("-")[:40]
+
+
 # ── slug generation ────────────────────────────────────────────────────────────
 
 _NON_ALNUM_RE = re.compile(r"[^a-z0-9]+")
@@ -180,21 +200,31 @@ def render_frontmatter(
     cost_usd: float | None,
     redactions: dict[str, int],
 ) -> str:
-    """Render YAML frontmatter block. Title is sanitized inside here."""
+    """Render YAML frontmatter block. Title is sanitized inside here.
+
+    Every string scalar goes through json.dumps: a JSON string is valid YAML
+    and inert, so a title like "Decision: use X" (the house style) or any
+    residual ':'/'#'/quote in a model-supplied value cannot break parsing or
+    inject keys. Obsidian/pyyaml both read the quoted form identically.
+    """
     clean_title = sanitize_title(title)
-    tags_yaml = "[" + ", ".join(tags) + "]"
-    redact_yaml = "{" + ", ".join(f"{k}: {v}" for k, v in redactions.items()) + "}"
+
+    def q(v) -> str:
+        return json.dumps(str(v), ensure_ascii=False)
+
+    tags_yaml = "[" + ", ".join(q(t) for t in tags) + "]"
+    redact_yaml = "{" + ", ".join(f"{q(k)}: {int(v)}" for k, v in redactions.items()) + "}"
     cost_str = f"{cost_usd:.4f}" if cost_usd is not None else "null"
     return (
         f"---\n"
-        f"title: {clean_title}\n"
-        f"type: {fm_type}\n"
-        f"project: {project}\n"
+        f"title: {q(clean_title)}\n"
+        f"type: {q(fm_type)}\n"
+        f"project: {q(project)}\n"
         f"tags: {tags_yaml}\n"
-        f"source: {source}\n"
-        f"session_id: {session_id}\n"
+        f"source: {q(source)}\n"
+        f"session_id: {q(session_id)}\n"
         f"created: {created}\n"
-        f"model: {model}\n"
+        f"model: {q(model)}\n"
         f"cost_usd: {cost_str}\n"
         f"redactions: {redact_yaml}\n"
         f"---\n"
@@ -499,6 +529,18 @@ def _call_path_a(scrubbed_text: str, prompts_dir: pathlib.Path) -> dict | None:
                 "cost_usd": _estimate_cost_a(tokens_in, tokens_out),
             }
             raise
+        if not isinstance(data, dict):
+            # Valid JSON that isn't an object (quoted "null", a list, a number)
+            # is malformed for our schema — route it down the malformed_json
+            # path with usage attached, not an AttributeError that loses both.
+            _log_error(f"PATH_A malformed_json (non-object): {raw[:200]}")
+            exc = json.JSONDecodeError("model returned non-object JSON", raw, 0)
+            exc.usage = {  # type: ignore[attr-defined]
+                "tokens_in": tokens_in,
+                "tokens_out": tokens_out,
+                "cost_usd": _estimate_cost_a(tokens_in, tokens_out),
+            }
+            raise exc
         break  # got an artifact
 
     usage = {
@@ -680,10 +722,13 @@ def run_capture(
     except Exception as exc:
         skip_reason_a = f"error:{type(exc).__name__}"
 
-    # ── 8. scrub model output (title, body, source_links) ───────────────────
+    # ── 8. scrub model output (title, body, tags, source_links) ──────────────
     if result_a:
         result_a["title"], _ = scrub_mod.scrub(result_a.get("title", ""))
         result_a["body"], _ = scrub_mod.scrub(result_a.get("body", ""))
+        result_a["tags"] = [
+            scrub_mod.scrub(str(t))[0] for t in result_a.get("tags", [])
+        ]
         result_a["source_links"] = [
             scrub_mod.scrub(lnk)[0] for lnk in result_a.get("source_links", [])
         ]
@@ -699,7 +744,7 @@ def run_capture(
         _write_artifact(
             full_path_a,
             title=title_a,
-            fm_type=result_a.get("type", "decision"),
+            fm_type=sanitize_type(result_a.get("type", "decision")),
             project=project,
             source="claude-code-curated",
             session_id=session_id,
@@ -707,7 +752,9 @@ def run_capture(
             model=MODEL_A,
             cost_usd=cost_usd_a,
             redactions=redactions,
-            tags=["claude-code", "curated"] + result_a.get("tags", []),
+            # model tags are scrubbed (step 8) then slug-coerced; empties drop out
+            tags=["claude-code", "curated"]
+            + [s for s in (sanitize_tag(t) for t in result_a.get("tags", [])[:10]) if s],
             body=result_a.get("body", ""),
             source_links=result_a.get("source_links", []),
         )

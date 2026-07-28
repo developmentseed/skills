@@ -9,6 +9,8 @@ import yaml
 from curate import (
     sanitize_title,
     sanitize_summary,
+    sanitize_tag,
+    sanitize_type,
     make_slug,
     make_filename,
     render_frontmatter,
@@ -156,6 +158,100 @@ class TestRenderFrontmatter:
         )
         assert fm.startswith("---")
         assert "---\n" in fm[3:]  # closing delimiter present
+
+
+class TestYamlRoundTrip:
+    """Rendered frontmatter must survive a real YAML parser — the contract
+    Obsidian holds us to. A partition-on-colon test parser once masked that
+    the house-style 'Decision: …' titles produced unparseable frontmatter.
+    """
+
+    EXPECTED_KEYS = {
+        "title", "type", "project", "tags", "source",
+        "session_id", "created", "model", "cost_usd", "redactions",
+    }
+
+    @staticmethod
+    def _render(**overrides):
+        kwargs = dict(
+            title="Decision: Use PostgreSQL with PgBouncer",
+            fm_type="decision",
+            project="my-project",
+            tags=["claude-code", "curated"],
+            source="claude-code-curated",
+            session_id="abc-123",
+            created="2026-04-23",
+            model="claude-sonnet-4-6",
+            cost_usd=0.0123,
+            redactions={"env_var": 2},
+        )
+        kwargs.update(overrides)
+        return render_frontmatter(**kwargs)
+
+    def _parse(self, fm: str) -> dict:
+        block = fm.split("---\n", 2)[1]
+        data = yaml.safe_load(block)
+        assert isinstance(data, dict)
+        return data
+
+    def test_colon_title_house_style_parses(self):
+        data = self._parse(self._render())
+        assert data["title"] == "Decision: Use PostgreSQL with PgBouncer"
+
+    def test_quotes_hash_unicode_in_title(self):
+        data = self._parse(
+            self._render(title='Runbook: rotate "prod" keys — étape 1')
+        )
+        assert data["title"].startswith("Runbook: rotate")
+
+    def test_hostile_tag_cannot_inject_keys(self):
+        # render must be inert even for raw strings (defense in depth beneath
+        # the sanitize_tag layer applied by run_capture)
+        data = self._parse(
+            self._render(tags=["ok", "x\nsource: attacker", "a]b", "c: d"])
+        )
+        assert set(data.keys()) == self.EXPECTED_KEYS
+        assert data["source"] == "claude-code-curated"
+        assert "x\nsource: attacker" in data["tags"]
+
+    def test_hostile_type_and_project_cannot_break_block(self):
+        data = self._parse(
+            self._render(fm_type="x\n---\nevil: 1", project="proj: {a}")
+        )
+        assert set(data.keys()) == self.EXPECTED_KEYS
+        assert "evil" not in data
+
+    def test_null_cost_and_redactions_types(self):
+        data = self._parse(self._render(cost_usd=None))
+        assert data["cost_usd"] is None
+        assert data["redactions"] == {"env_var": 2}
+
+
+class TestSanitizeType:
+    def test_allowlisted_types_pass(self):
+        for t in ("decision", "runbook", "gotcha", "spec"):
+            assert sanitize_type(t) == t
+
+    def test_anything_else_collapses_to_decision(self):
+        for t in ("Decision", "note\n---\n", "", None, 42, "adr"):
+            assert sanitize_type(t) == "decision"
+
+
+class TestSanitizeTag:
+    def test_plain_tag_unchanged(self):
+        assert sanitize_tag("backend") == "backend"
+
+    def test_hostile_chars_collapse_to_dashes(self):
+        assert sanitize_tag("x\nsource: attacker") == "x-source-attacker"
+        assert sanitize_tag("a]b[c") == "a-b-c"
+
+    def test_unicode_and_case_normalized(self):
+        assert sanitize_tag("Réseau Backend") == "reseau-backend"
+
+    def test_caps_at_40_and_can_empty(self):
+        assert len(sanitize_tag("x" * 100)) == 40
+        assert sanitize_tag("!!!") == ""
+        assert sanitize_tag(42) == "42"
 
 
 class TestSanitizeSummary:

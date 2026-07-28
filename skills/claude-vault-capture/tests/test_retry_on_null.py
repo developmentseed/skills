@@ -72,3 +72,20 @@ def test_malformed_json_is_not_retried(monkeypatch):
 
     assert calls["n"] == 1  # malformed raises immediately, no retry
     assert exc.value.usage["tokens_in"] == 100  # usage attached for cost logging
+
+
+@pytest.mark.parametrize(
+    "raw",
+    ['"null"', "[1, 2]", "42"],
+    ids=["quoted-null-string", "list", "number"],
+)
+def test_valid_but_non_object_json_is_malformed_with_usage(monkeypatch, raw):
+    """Non-dict JSON once crashed as AttributeError, losing token accounting."""
+    fake, calls = _seq((raw, 100, 3))
+    monkeypatch.setattr(curate, "_invoke_model", fake)
+
+    with pytest.raises(json.JSONDecodeError) as exc:
+        curate._call_path_a("scrubbed", PROMPTS)
+
+    assert exc.value.usage["tokens_in"] == 100
+    assert exc.value.usage["tokens_out"] == 3

@@ -20,22 +20,26 @@ os.environ.setdefault("SCRUB_FAILURES_PATH", _SESSION_FAILURES_PATH)
 import json
 from types import SimpleNamespace
 import pytest
+import yaml
 
 
 def parse_frontmatter(text: str) -> dict:
-    """Read a flat-scalar YAML frontmatter block into a dict.
+    """Parse the frontmatter block with a real YAML parser.
 
-    Good enough for the scalar fields the artifacts emit (title, source, type,
-    session_id, model, …). Shared by the e2e and live test modules.
+    A hand-rolled partition-on-colon parser once masked a bug where rendered
+    frontmatter was invalid YAML for any title containing ': ' — Obsidian
+    rejected what the tests accepted. Parsing with yaml.safe_load means the
+    suite fails exactly when Obsidian would. Values are coerced to str so
+    existing string-equality assertions keep working; dates render ISO.
     """
     assert text.startswith("---\n")
     block = text.split("---\n", 2)[1]
-    fm = {}
-    for line in block.splitlines():
-        if ":" in line:
-            k, _, v = line.partition(":")
-            fm[k.strip()] = v.strip()
-    return fm
+    data = yaml.safe_load(block)
+    assert isinstance(data, dict), f"frontmatter is not a YAML mapping: {block!r}"
+    return {
+        k: v if isinstance(v, (dict, list)) else ("null" if v is None else str(v))
+        for k, v in data.items()
+    }
 
 
 def pytest_configure(config):
