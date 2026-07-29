@@ -72,8 +72,12 @@ LOG_PATH = STATE_DIR / "log.md"
 INDEX_PATH = STATE_DIR / "session-index.tsv"
 HOOKS_LOG = pathlib.Path.home() / ".claude" / "hooks.log"
 
-MODEL_A = "claude-sonnet-4-6"
-MAX_TOKENS_A = 2000
+MODEL_A = "claude-sonnet-5"
+# Raised from 2000 with the move to Sonnet 5: its tokenizer emits roughly 30%
+# more tokens for the same text, so an artifact that fit in 2000 output tokens
+# on Sonnet 4.6 can now truncate mid-JSON — which surfaces as malformed_json and
+# a lost capture, not an obvious error.
+MAX_TOKENS_A = 3000
 # Hard wall on a single model call. Overridable via CAPTURE_TIMEOUT_SECONDS for
 # environments with large sessions or slow links (e.g. subscription mode, where a
 # big transcript can take longer than the 30s default). All model work is
@@ -352,7 +356,14 @@ def uses_excluded_command(
 
 
 def is_above_token_limit(text: str) -> bool:
-    """True if estimated token count exceeds CAPTURE_MAX_EST_TOKENS."""
+    """True if estimated token count exceeds CAPTURE_MAX_EST_TOKENS.
+
+    chars/4 is a rough heuristic and now runs ~30% low against Sonnet 5's
+    tokenizer, so the ceiling admits somewhat larger transcripts than the number
+    suggests. Left as-is deliberately: tightening it would silently start
+    skipping sessions that are captured today. Lower CAPTURE_MAX_EST_TOKENS if
+    you want the old effective cutoff back.
+    """
     limit = int(os.environ.get("CAPTURE_MAX_EST_TOKENS", str(CAPTURE_MAX_EST_TOKENS)))
     return len(text) // 4 > limit
 
@@ -529,6 +540,15 @@ def _invoke_via_api_key(
             model=model,
             max_tokens=max_tokens,
             system=system_prompt,
+            # Explicitly off. Sonnet 5 runs adaptive thinking when this is
+            # omitted (Sonnet 4.6 did not), and max_tokens caps thinking AND
+            # the reply together — so leaving it unset would spend the artifact's
+            # budget on reasoning and truncate the JSON. This is a one-shot
+            # extraction against a hard timeout, so thinking buys little here;
+            # if capture quality ever needs it, prefer adaptive at low effort
+            # (thinking={"type": "adaptive"}, output_config={"effort": "low"})
+            # over simply removing this line, and raise max_tokens with it.
+            thinking={"type": "disabled"},
             messages=[{"role": "user", "content": user_text}],
             timeout=TIMEOUT_SECONDS,
         )
@@ -649,7 +669,7 @@ def _invoke_via_subscription(
 
 
 def _call_path_a(scrubbed_text: str, prompts_dir: pathlib.Path) -> dict | None:
-    """Call claude-sonnet-4-6 with the curation prompt.
+    """Call claude-sonnet-5 with the curation prompt.
 
     Returns the artifact dict with usage keys (tokens_in/tokens_out/cost_usd)
     merged in. A model null does NOT return None: it returns the usage dict
@@ -755,7 +775,9 @@ def _call_path_a(scrubbed_text: str, prompts_dir: pathlib.Path) -> dict | None:
 
 
 def _estimate_cost_a(tokens_in: int, tokens_out: int) -> float:
-    # claude-sonnet-4-6: $3/M input, $15/M output
+    # claude-sonnet-5: $3/M input, $15/M output — same list price as Sonnet 4.6,
+    # so this stays accurate. (Introductory rates of $2/$10 run through
+    # 2026-08-31; until then this over-reports rather than under-reports.)
     return (tokens_in * 3 + tokens_out * 15) / 1_000_000
 
 

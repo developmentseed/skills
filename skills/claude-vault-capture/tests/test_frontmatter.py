@@ -108,7 +108,7 @@ class TestRenderFrontmatter:
             source="claude-code-curated",
             session_id="abc-123",
             created="2026-04-23",
-            model="claude-sonnet-4-6",
+            model="claude-sonnet-5",
             cost_usd=0.0123,
             redactions={"env_var": 0, "jwt": 1},
         )
@@ -176,7 +176,7 @@ class TestYamlRoundTrip:
             source="claude-code-curated",
             session_id="abc-123",
             created="2026-04-23",
-            model="claude-sonnet-4-6",
+            model="claude-sonnet-5",
             cost_usd=0.0123,
             redactions={"env_var": 2},
         )

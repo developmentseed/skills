@@ -82,7 +82,7 @@ def test_clean_run_returns_text_and_tokens(monkeypatch):
         ],
     )
     text, tokens_in, tokens_out = curate._invoke_via_subscription(
-        "claude-sonnet-4-6", "system", "transcript"
+        "claude-sonnet-5", "system", "transcript"
     )
     assert text == '{"title": "x"}'
     assert tokens_in == 60
@@ -93,7 +93,7 @@ def test_options_disable_tools_and_leave_turn_headroom(monkeypatch):
     """tools=[] removes the built-in toolset (the root cause: tool attempts
     burned the only turn); max_turns > 1 keeps headroom if one is burned anyway."""
     _install_fake_sdk(monkeypatch, [_AssistantMessage(content=[_TextBlock("null")])])
-    curate._invoke_via_subscription("claude-sonnet-4-6", "system", "transcript")
+    curate._invoke_via_subscription("claude-sonnet-5", "system", "transcript")
     assert _CapturedOptions.last_kwargs["tools"] == []
     assert _CapturedOptions.last_kwargs["allowed_tools"] == []
     assert _CapturedOptions.last_kwargs["max_turns"] > 1
@@ -111,7 +111,7 @@ def test_multi_turn_preamble_is_not_prepended_to_reply(monkeypatch):
         ],
     )
     text, _, _ = curate._invoke_via_subscription(
-        "claude-sonnet-4-6", "system", "transcript"
+        "claude-sonnet-5", "system", "transcript"
     )
     assert text == "null"
 
@@ -128,7 +128,7 @@ def test_error_after_streamed_reply_is_salvaged_with_unknown_usage(monkeypatch):
         ),
     )
     text, tokens_in, tokens_out = curate._invoke_via_subscription(
-        "claude-sonnet-4-6", "system", "transcript"
+        "claude-sonnet-5", "system", "transcript"
     )
     # Salvage keeps the whole stream (the downstream outermost-brace salvage
     # extracts the JSON), and usage that never arrived is None, not a fake 0.
@@ -144,4 +144,4 @@ def test_error_before_any_reply_still_raises(monkeypatch):
         error=Exception("Claude Code returned an error result: success"),
     )
     with pytest.raises(Exception, match="error result"):
-        curate._invoke_via_subscription("claude-sonnet-4-6", "system", "transcript")
+        curate._invoke_via_subscription("claude-sonnet-5", "system", "transcript")

@@ -1,4 +1,4 @@
-# Path A — Curation Prompt (claude-sonnet-4-6)
+# Path A — Curation Prompt (claude-sonnet-5)
 
 You receive the full text of a Claude Code session. Extract a **single durable artifact** if one is clearly present: a decision, runbook, spec, gotcha, or devlog-snippet. If the session is exploratory debugging, venting, or low-signal, return **exactly** `null` (lowercase, no quotes, no JSON).
 

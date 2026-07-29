@@ -88,3 +88,40 @@ def test_run_capture_maps_api_timeout_to_skip_reason(monkeypatch, temp_vault):
     entries = read_log(temp_vault.log_path)
     assert len(entries) == 1
     assert entries[0]["skip_reason_a"] == "timeout"
+
+
+class TestSonnet5RequestShape:
+    """Sonnet 5 runs adaptive thinking when `thinking` is omitted, and max_tokens
+    caps thinking and the reply together — so an unset `thinking` would spend the
+    artifact's budget on reasoning and truncate the JSON into malformed_json.
+    """
+
+    def _capture_kwargs(self, monkeypatch):
+        seen = {}
+
+        class _Messages:
+            def create(self, **kwargs):
+                seen.update(kwargs)
+                raise RuntimeError("stop after capturing kwargs")
+
+        class _Client:
+            def __init__(self, *a, **kw):
+                self.messages = _Messages()
+
+        monkeypatch.setattr(anthropic, "Anthropic", _Client)
+        try:
+            curate._invoke_via_api_key(curate.MODEL_A, curate.MAX_TOKENS_A, "sys", "text")
+        except RuntimeError:
+            pass
+        return seen
+
+    def test_thinking_is_explicitly_disabled(self, monkeypatch):
+        assert self._capture_kwargs(monkeypatch).get("thinking") == {"type": "disabled"}
+
+    def test_no_removed_sampling_params(self, monkeypatch):
+        # temperature / top_p / top_k are rejected with a 400 on Sonnet 5.
+        kwargs = self._capture_kwargs(monkeypatch)
+        assert not {"temperature", "top_p", "top_k"} & set(kwargs)
+
+    def test_output_budget_has_headroom_for_the_new_tokenizer(self, monkeypatch):
+        assert curate.MAX_TOKENS_A >= 2600  # ~30% above the Sonnet 4.6 budget of 2000
