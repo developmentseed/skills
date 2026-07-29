@@ -56,20 +56,37 @@ fi
 : "${CAPTURE_USE_SUBSCRIPTION:=${CLAUDE_PLUGIN_OPTION_USE_SUBSCRIPTION:-}}"
 export CAPTURE_VAULT_DIR CAPTURE_USE_SUBSCRIPTION
 
-# Timeout is exported only when set to a plain integer. curate.py reads it with
-# a *string* default — os.environ.get("CAPTURE_TIMEOUT_SECONDS", "30") — so an
-# empty or non-numeric value is a ValueError at import, i.e. a silent no-capture,
-# rather than a fallback to 30. Reject junk here and log it instead.
-: "${CAPTURE_TIMEOUT_SECONDS:=${CLAUDE_PLUGIN_OPTION_TIMEOUT_SECONDS:-}}"
-if [[ -n "${CAPTURE_TIMEOUT_SECONDS:-}" ]]; then
-    if [[ "$CAPTURE_TIMEOUT_SECONDS" =~ ^[0-9]+$ ]]; then
-        export CAPTURE_TIMEOUT_SECONDS
-    else
-        printf 'CAPTURE_BAD_TIMEOUT\t%s\ttimeout_seconds=%s is not an integer — using the 30s default\n' \
-            "$NOW" "$CAPTURE_TIMEOUT_SECONDS" >> "$HOOKS_LOG"
-        unset CAPTURE_TIMEOUT_SECONDS
+# Numeric settings are exported only when they really are integers: curate.py
+# reads them with *string* defaults — os.environ.get("CAPTURE_TIMEOUT_SECONDS",
+# "30") — so an empty or non-numeric value is a ValueError at import, i.e. a
+# silent no-capture, rather than a fallback. Reject junk here and log it.
+_export_int_setting() {
+    local name="$1" value
+    value="${!name:-}"
+    if [[ -z "$value" ]]; then
+        return 0
     fi
-fi
+    if [[ "$value" =~ ^[0-9]+$ ]]; then
+        # ${name?} form: exports the variable *named by* $name (shellcheck SC2163
+        # flags the bare "$name" spelling even though it behaves identically).
+        export "${name?}"
+    else
+        printf 'CAPTURE_BAD_SETTING\t%s\t%s=%s is not a whole number — using the default\n' \
+            "$NOW" "$name" "$value" >> "$HOOKS_LOG"
+        unset "$name"
+    fi
+}
+
+: "${CAPTURE_TIMEOUT_SECONDS:=${CLAUDE_PLUGIN_OPTION_TIMEOUT_SECONDS:-}}"
+_export_int_setting CAPTURE_TIMEOUT_SECONDS
+
+: "${CAPTURE_MAX_EST_TOKENS:=${CLAUDE_PLUGIN_OPTION_MAX_EST_TOKENS:-}}"
+_export_int_setting CAPTURE_MAX_EST_TOKENS
+
+# Free-form string: an empty value is harmless here (curate.py splits on "," and
+# drops empties), so it needs no validation — just the mapping.
+: "${CAPTURE_EXCLUDED_COMMANDS:=${CLAUDE_PLUGIN_OPTION_EXCLUDED_COMMANDS:-}}"
+export CAPTURE_EXCLUDED_COMMANDS
 
 # Runtime state (dedup index, per-session log, scrub-failure log): prefer the
 # plugin's persistent data dir, which survives plugin updates. Standalone use

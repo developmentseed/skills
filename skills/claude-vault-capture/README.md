@@ -54,8 +54,8 @@ Set via the plugin config prompt (`/plugin` → configure), or override with env
 | `anthropic_api_key` / `ANTHROPIC_API_KEY` | — | API key for metered (default) mode; falls back to `~/.claude_vault_token`. |
 | `use_subscription` / `CAPTURE_USE_SUBSCRIPTION` | — | `1` routes model calls through your Claude Pro/Max subscription. |
 | `oauth_token` / `CLAUDE_CODE_OAUTH_TOKEN` | — | Subscription auth; falls back to `~/.claude_vault_oauth_token`. |
-| `CAPTURE_MAX_EST_TOKENS` | `50000` | Token ceiling before skipping (~200 KB transcript). |
-| `CAPTURE_EXCLUDED_COMMANDS` | — | Comma-separated slash commands whose sessions are not captured. |
+| `max_est_tokens` / `CAPTURE_MAX_EST_TOKENS` | `50000` | Token ceiling before skipping (~200 KB transcript). |
+| `excluded_commands` / `CAPTURE_EXCLUDED_COMMANDS` | — | Comma-separated slash commands whose sessions are not captured. |
 | `timeout_seconds` / `CAPTURE_TIMEOUT_SECONDS` | `30` | Hard wall on a single model call. Raise it for large sessions or slow links (subscription mode especially) — all model work is backgrounded, so a higher value never delays session close. |
 | `CAPTURE_STATE_DIR` | `${CLAUDE_PLUGIN_DATA}/state` | Where the dedup index and per-session log live. Set automatically for plugin installs. |
 | `CAPTURE_TOOL_CHARS_BUDGET` | `30000` | Character budget for the tool activity (commands, files touched) summarized alongside the conversation. |

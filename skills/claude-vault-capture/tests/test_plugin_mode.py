@@ -58,6 +58,12 @@ def _build_plugin(home: pathlib.Path) -> pathlib.Path:
         'printf "CAPTURE_STATE_DIR=%s\\n" "${CAPTURE_STATE_DIR:-}" >> "$TMP"\n'
         'printf "SCRUB_FAILURES_PATH=%s\\n" "${SCRUB_FAILURES_PATH:-}" >> "$TMP"\n'
         'printf "CAPTURE_USE_SUBSCRIPTION=%s\\n" "${CAPTURE_USE_SUBSCRIPTION:-}" >> "$TMP"\n'
+        'printf "CAPTURE_EXCLUDED_COMMANDS=%s\\n" "${CAPTURE_EXCLUDED_COMMANDS:-}" >> "$TMP"\n'
+        'if [ -z "${CAPTURE_MAX_EST_TOKENS+x}" ]; then\n'
+        '  printf "CAPTURE_MAX_EST_TOKENS=UNSET\\n" >> "$TMP"\n'
+        "else\n"
+        '  printf "CAPTURE_MAX_EST_TOKENS=SET[%s]\\n" "$CAPTURE_MAX_EST_TOKENS" >> "$TMP"\n'
+        "fi\n"
         'if [ -z "${CAPTURE_TIMEOUT_SECONDS+x}" ]; then\n'
         '  printf "CAPTURE_TIMEOUT_SECONDS=UNSET\\n" >> "$TMP"\n'
         "else\n"
@@ -224,7 +230,60 @@ class TestTimeoutOption:
         assert proc.returncode == 0, proc.stderr
         assert _wait_for(invocation), "junk config must not stop the capture"
         assert "CAPTURE_TIMEOUT_SECONDS=UNSET" in invocation.read_text()
-        assert "CAPTURE_BAD_TIMEOUT" in (home / ".claude" / "hooks.log").read_text()
+        assert "CAPTURE_BAD_SETTING" in (home / ".claude" / "hooks.log").read_text()
+
+
+class TestMigratedSettings:
+    """Settings a standalone capture.env commonly carries. Without a userConfig
+    entry each of these is silently lost when moving to the plugin: excluded
+    commands start getting captured, and a raised token ceiling drops back to
+    50000 so long sessions begin skipping."""
+
+    def test_excluded_commands_maps_through(self, tmp_path):
+        home = tmp_path / "home"
+        home.mkdir()
+        invocation = _build_plugin(home)
+
+        proc = _run_hook(
+            home,
+            extra_env={
+                "CLAUDE_PLUGIN_OPTION_EXCLUDED_COMMANDS": "/daily-devlog,/weekly-recap"
+            },
+        )
+
+        assert proc.returncode == 0, proc.stderr
+        assert _wait_for(invocation)
+        assert (
+            "CAPTURE_EXCLUDED_COMMANDS=/daily-devlog,/weekly-recap"
+            in invocation.read_text()
+        )
+
+    def test_max_est_tokens_maps_through(self, tmp_path):
+        home = tmp_path / "home"
+        home.mkdir()
+        invocation = _build_plugin(home)
+
+        proc = _run_hook(
+            home, extra_env={"CLAUDE_PLUGIN_OPTION_MAX_EST_TOKENS": "120000"}
+        )
+
+        assert proc.returncode == 0, proc.stderr
+        assert _wait_for(invocation)
+        assert "CAPTURE_MAX_EST_TOKENS=SET[120000]" in invocation.read_text()
+
+    def test_non_numeric_max_est_tokens_is_rejected(self, tmp_path):
+        home = tmp_path / "home"
+        home.mkdir()
+        invocation = _build_plugin(home)
+
+        proc = _run_hook(
+            home, extra_env={"CLAUDE_PLUGIN_OPTION_MAX_EST_TOKENS": "120k"}
+        )
+
+        assert proc.returncode == 0, proc.stderr
+        assert _wait_for(invocation), "junk config must not stop the capture"
+        assert "CAPTURE_MAX_EST_TOKENS=UNSET" in invocation.read_text()
+        assert "CAPTURE_BAD_SETTING" in (home / ".claude" / "hooks.log").read_text()
 
 
 class TestDeployIdentity:

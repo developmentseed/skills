@@ -19,6 +19,16 @@
       "title": "Model call timeout (seconds)",
       "description": "Hard wall on a single model call; leave blank for 30. Raise it if captures are being lost to timeouts on large sessions or in subscription mode — all model work is backgrounded, so a higher value never delays session close. Must be a whole number."
     },
+    "excluded_commands": {
+      "type": "string",
+      "title": "Excluded slash commands",
+      "description": "Comma-separated slash commands whose sessions are never captured, e.g. /daily-devlog,/weekly-recap. Leave blank to capture every qualifying session."
+    },
+    "max_est_tokens": {
+      "type": "string",
+      "title": "Token ceiling before skipping",
+      "description": "Sessions estimated above this many tokens are skipped un-captured; leave blank for 50000 (~200 KB of transcript). Raise it if long sessions are being skipped. Must be a whole number."
+    },
     "use_subscription": {
       "type": "string",
       "title": "Bill to Claude subscription",
