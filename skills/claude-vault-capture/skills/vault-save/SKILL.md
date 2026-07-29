@@ -39,7 +39,11 @@ Derive the following fields from the document content and the current working di
 
 **created** — today's date in YYYY-MM-DD format.
 
-**model** — the current model ID (e.g. `claude-sonnet-4-6`).
+**model** — the current model ID (e.g. `claude-sonnet-5`).
+
+> **No secret scrubbing on this path.** Automatic session capture runs everything
+> through a regex scrubber; `/vault-save` does not — you are writing the document
+> directly to the vault. Check the content for credentials before saving.
 
 **Step 2c — Infer `summary`**: Write one sentence (≤ 140 characters) describing what this document is. Prose, no markdown. Sanitize same as title: remove `|`, `]]`, `[[`, `#`, backticks, control characters; collapse whitespace. Self-check the character count before proceeding — if it exceeds 140 chars, shorten it until it fits.
 

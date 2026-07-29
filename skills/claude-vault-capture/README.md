@@ -2,7 +2,9 @@
 
 Automatically turn your [Claude Code](https://claude.com/claude-code) sessions into notes in your [Obsidian](https://obsidian.md) vault. When a session ends, a background job summarizes it and drops a markdown file into your vault's `Inbox/auto/` — so the decisions, runbooks, and gotchas you worked through don't evaporate when you close the terminal.
 
-Nothing runs synchronously on session close (the hook returns in well under 200 ms); all model work is backgrounded. Secrets are scrubbed before anything is sent to a model and again before anything is written to disk.
+Nothing runs synchronously on session close (the hook returns in well under 200 ms); all model work is backgrounded.
+
+**Before you install, two things to know.** This plugin makes a **paid model call at the end of every qualifying session** — on real usage the median is about **$0.12 per captured session** (Sonnet 5 list price; sessions that don't qualify cost nothing, and you can bill to a Pro/Max plan instead — see [Subscription mode](#subscription-mode)). And it **sends your session transcript to the Anthropic API** — your prompts, Claude's replies, and a summary of tool activity including commands run and error output. A regex scrubber redacts common credential shapes first (API keys, tokens, JWTs, `KEY=` assignments, basic-auth URLs), but it is pattern-matching over known formats, **not a guarantee** — it cannot recognise a secret it has no pattern for. If you work with material that must not reach a model API, don't install this.
 
 > **Provenance.** This plugin is adapted from [**developmentseed/claude-vault-capture**](https://github.com/developmentseed/claude-vault-capture) by **Loïc Houpert**, MIT-licensed (see [`LICENSE`](LICENSE)). It has been repackaged here as a Claude Code marketplace plugin: the standalone `install.sh` is replaced by the plugin's hook registration + `userConfig`, and the worker now runs via `uv run` (PEP 723 inline deps) so no separate `uv sync` step is needed. Original authorship is preserved in this repository's commit history.
 
@@ -26,23 +28,57 @@ Nothing runs synchronously on session close (the hook returns in well under 200 
 /plugin install claude-vault-capture@skills
 ```
 
-When the plugin is enabled, Claude Code prompts for your **Obsidian vault path** (and, optionally, an API key). That's it — the `SessionEnd` hook is registered automatically and the `/vault-save` skill becomes available. Sensitive values (API key, OAuth token) are stored in your OS keychain.
+When the plugin is enabled, Claude Code prompts for its configuration. **Two fields are required in practice** — the rest can stay blank:
+
+- **Obsidian vault path** (`vault_dir`) — where notes are written.
+- **Credentials** — *either* paste an **Anthropic API key** (`anthropic_api_key`), *or* set **`use_subscription`** to `1` **and** paste an OAuth token (see [Subscription mode](#subscription-mode)).
+
+With no credential the plugin looks installed and its hook fires, but every capture aborts before the model call — **no note, and no entry in the log**. The only trace is a single line in `~/.claude/hooks.log`. This is the most common reason a fresh install appears to do nothing, and it catches Pro/Max users in particular, since they often have no `ANTHROPIC_API_KEY` anywhere.
+
+The `SessionEnd` hook is registered automatically and the `/vault-save` skill becomes available. Sensitive values (API key, OAuth token) are stored in your OS keychain (macOS Keychain; the platform-appropriate secret store elsewhere).
 
 Runtime state (a dedup index and a per-session log) is kept in the plugin's persistent data directory (`${CLAUDE_PLUGIN_DATA}`), which survives plugin updates.
 
 ## Verify it's working
 
-After your next Claude Code session ends:
+The hook fires at session *end*, so this is about your **next** session, not the one you installed in. Make it a substantial one — short sessions are skipped by design.
+
+The log is the only check that distinguishes "working, nothing worth capturing" from "broken". Resolve the state directory first (`${CLAUDE_PLUGIN_DATA}` is set for the hook, not for your shell):
 
 ```bash
-# Hook fired?
-grep SESSION_END_RECEIVED ~/.claude/hooks.log | tail -5
-
-# Files written?
-ls "<your-vault>"/Inbox/auto/
+STATE=~/.claude/plugins/data/claude-vault-capture-skills/state
+tail -1 "$STATE/log.md" | python3 -m json.tool
 ```
 
-Sessions are silently skipped when: fewer than 3 user turns, under 1500 chars of user content, a command listed in `CAPTURE_EXCLUDED_COMMANDS` was used (empty by default), or the session is already indexed.
+`"skip_reason_a": null` means a note was written, and `path_a` names it. Any other value is a skip, and the value tells you which.
+
+> Don't rely on `grep SESSION_END_RECEIVED ~/.claude/hooks.log` alone — that marker is written *before* the worker starts, so it appears even when capture is completely broken. An empty `Inbox/auto/` is equally ambiguous: it's the correct result for a low-signal session.
+
+### Nothing was captured
+
+Check the `skip_reason_a` from the log above:
+
+| `skip_reason_a` | Meaning |
+|---|---|
+| `threshold` | fewer than 3 user turns, or under 1500 chars of your own content — working as intended |
+| `model_returned_null` | the model judged the session had no durable artifact — the single most common reason, and normal |
+| `duplicate` | that session was already captured |
+| `excluded_command` | a slash command in `excluded_commands` was used |
+| `token_limit` | transcript above `max_est_tokens` |
+| `timeout` | the model call exceeded `timeout_seconds` — raise it |
+| `malformed_json` | the model didn't return a usable artifact; transient unless it's every session |
+| `transcript_missing` | the transcript file couldn't be read |
+| `error:<Type>` | anything else; the message is in `hooks.log` |
+
+**If `log.md` doesn't exist or has no row for the session at all**, the worker never got that far. `grep -E 'CAPTURE_|skipping capture' ~/.claude/hooks.log | tail` names the cause:
+
+| Marker in `hooks.log` | Fix |
+|---|---|
+| `skipping capture` (no key / no token) | set `anthropic_api_key`, or `use_subscription=1` + `oauth_token` |
+| `CAPTURE_TOKEN_FILE_PERMS` | `chmod 600` the credential file it names |
+| `CAPTURE_NOT_CONFIGURED` | set `vault_dir` |
+| `CAPTURE_NO_INTERPRETER` / `CAPTURE_NO_PYTHON3` | install `uv` / `python3` (see Prerequisites) |
+| `CAPTURE_HOOK_JSON_UNPARSED` | report it — the hook payload didn't parse |
 
 ## Configuration
 
@@ -91,12 +127,19 @@ This is a capture *engine*. Triaging captured artifacts into structured vault fo
 
 To stop the pipeline from archiving an extension's own workflow sessions, set `CAPTURE_EXCLUDED_COMMANDS`.
 
+## Turning it off
+
+Disable or uninstall from `/plugin` — the `SessionEnd` hook goes with it, and capture stops immediately. To pause instead, set `excluded_commands` to a command you always use, or remove the credential.
+
+Nothing is cleaned up on uninstall, by design: notes already in `<vault>/Inbox/auto/` and `<vault>/claude-docs/` are ordinary markdown files that stay yours. The dedup index and log under `${CLAUDE_PLUGIN_DATA}` are left in place too, so re-installing resumes where you left off rather than re-capturing old sessions.
+
 ## Tests
 
 The Python pipeline ships with its test suite (no network, no API key needed).
-Run it from a **clone of the repo**, not from an installed plugin directory:
+Run it from a **clone of this repo**, from the plugin's own directory (it has its own `pyproject.toml`; `uv sync` from the repo root will not find it):
 
 ```bash
+cd skills/claude-vault-capture
 uv sync          # dev/test deps
 uv run pytest
 ```
