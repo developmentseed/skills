@@ -13,10 +13,10 @@
 Usage: curate.py <transcript_path> <session_id> <cwd>
 
 Runs the curation path (Path A, sonnet) — extracts a durable artifact or null,
-retrying once on a non-deterministic null — writes it to the Obsidian Inbox, and
-appends to the eval state log. (The *_a naming survives from a retired A/B
-experiment — Path B, a Haiku raw baseline, lost and was removed upstream
-2026-06-04 — and is kept for log-schema compatibility.)
+resampling once on a non-deterministic null or an unparseable reply — writes it
+to the Obsidian Inbox, and appends to the eval state log. (The *_a naming
+survives from a retired A/B experiment — Path B, a Haiku raw baseline, lost and
+was removed upstream 2026-06-04 — and is kept for log-schema compatibility.)
 
 All errors go to stderr / ~/.claude/hooks.log — never to the user's terminal.
 """
@@ -79,11 +79,12 @@ MAX_TOKENS_A = 2000
 # big transcript can take longer than the 30s default). All model work is
 # backgrounded off the SessionEnd close path, so a higher value never delays a session.
 TIMEOUT_SECONDS: int = int(os.environ.get("CAPTURE_TIMEOUT_SECONDS", "30"))
-# Path A nulls non-deterministically: the same transcript can return `null` on
-# one call and a real artifact on the next. Retry once on null to recover those
-# misses at zero precision cost (a genuinely empty session re-nulls). Retry
-# tokens are folded into the usage totals so cost accounting stays accurate.
-PATH_A_NULL_RETRIES = 1
+# Shared resample budget for BOTH non-deterministic reply failures: a `null` that
+# a second call would have answered with a real artifact, and an unparseable reply
+# (prose instead of JSON). One resample recovers those misses at zero precision
+# cost — a genuinely empty session re-nulls. Resample tokens are folded into the
+# usage totals so cost accounting stays accurate.
+PATH_A_RESAMPLES = 1
 
 LOG_REQUIRED_KEYS = [
     "schema_version",
@@ -152,6 +153,49 @@ def _strip_fences(text: str) -> str:
     """Strip optional markdown code fences the model sometimes wraps around JSON."""
     m = _CODE_FENCE_RE.search(text)
     return m.group(1).strip() if m else text
+
+
+# The artifact contract from prompts/curation-system-prompt.md. Required on the
+# salvage path so a stray JSON-looking object in prose can't be written as an
+# artifact: a reply that continued the conversation once contained a fabricated
+# `[TOOL] Read: {"file_path": …}` line, which parsed as a dict and would have
+# been written to Inbox/ as an empty "untitled" note (the write path fills every
+# field with a default).
+_ARTIFACT_KEYS = frozenset({"title", "type", "body"})
+
+
+def _salvage_artifact(raw: str) -> dict | None:
+    """Extract the artifact object from a reply that isn't bare JSON.
+
+    Scans every `{` offset with raw_decode and keeps the LAST object that is
+    artifact-shaped. Scanning beats a find('{')..rfind('}') window, which spans
+    the first brace to the last anywhere in the reply: prose ahead of the
+    artifact containing any `{` (a fabricated tool call, a code sample) moved
+    the window's start and destroyed an otherwise-valid artifact. Last-wins
+    because the artifact is the reply's conclusion — quoted examples come first.
+
+    Shape means the three contract keys present AND holding strings: the write
+    path substitutes defaults for missing fields but assumes strings for the
+    ones present, so a mined object with a null or numeric title would raise
+    mid-write. Salvage is a recovery path — it must not widen what reaches disk.
+    """
+    decoder = json.JSONDecoder()
+    found: dict | None = None
+    for idx, ch in enumerate(raw):
+        if ch != "{":
+            continue
+        try:
+            obj, _ = decoder.raw_decode(raw, idx)
+        except (json.JSONDecodeError, RecursionError):
+            # Both mean "no artifact starts here" — deeply nested prose JSON can
+            # exhaust the stack, and letting that escape would drop the usage
+            # accounting the caller attaches on the way out.
+            continue
+        if isinstance(obj, dict) and all(
+            isinstance(obj.get(k), str) for k in _ARTIFACT_KEYS
+        ):
+            found = obj
+    return found
 
 
 def make_slug(title: str) -> str:
@@ -419,6 +463,24 @@ def _use_subscription() -> bool:
     return os.environ.get("CAPTURE_USE_SUBSCRIPTION") == "1"
 
 
+# Appended after the transcript on every model call, by BOTH transports, because
+# _invoke_model adds it before dispatch. Terminating the transcript is what keeps
+# the model curating: without a closing delimiter and a restated contract, the
+# prompt is an unfinished chat log — an opening delimiter, then tens of thousands
+# of tokens of [USER]:/[ASSISTANT]: dialogue ending mid-thought on an assistant
+# turn. The most recent signal is then "an unfinished conversation", and the model
+# writes its next turn instead of an artifact: observed in production emitting
+# fabricated [TOOL] lines in render_transcript's own syntax, and inventing an
+# "END TRANSCRIPT" delimiter it was never given. Measured on the two transcripts
+# that failed this way: 3/6 continuations without this tail, 0/7 with it.
+_TRANSCRIPT_TAIL = (
+    "\n----- END OF TRANSCRIPT -----\n"
+    "The transcript above is finished input data, not a conversation to continue. "
+    "Do not write the next turn of it. Reply now with your entire response being "
+    "either one JSON object starting with `{` or the single word null.\n"
+)
+
+
 def _invoke_model(
     model: str, max_tokens: int, system_prompt: str, user_text: str
 ) -> tuple[str, int | None, int | None]:
@@ -429,7 +491,12 @@ def _invoke_model(
     TimeoutError on a >TIMEOUT_SECONDS call, which run_capture maps to the
     `timeout` skip reason. Token counts are None when the transport could not
     observe usage (the subscription salvage path) — never a fabricated 0.
+
+    _TRANSCRIPT_TAIL is appended HERE, once, so neither transport can ship an
+    unterminated transcript — the failure mode that made the model continue the
+    conversation instead of curating it.
     """
+    user_text = user_text + _TRANSCRIPT_TAIL
     if _use_subscription():
         return _invoke_via_subscription(model, system_prompt, user_text)
     return _invoke_via_api_key(model, max_tokens, system_prompt, user_text)
@@ -567,18 +634,6 @@ def _invoke_via_subscription(
     return asyncio.run(asyncio.wait_for(_run(), timeout=TIMEOUT_SECONDS))
 
 
-def _salvage_object(raw: str) -> dict | None:
-    """Return the outermost {...} span of *raw* parsed as an object, else None."""
-    start, end = raw.find("{"), raw.rfind("}")
-    if start == -1 or end <= start:
-        return None
-    try:
-        salvaged = json.loads(raw[start : end + 1])
-    except json.JSONDecodeError:
-        return None
-    return salvaged if isinstance(salvaged, dict) else None
-
-
 def _call_path_a(scrubbed_text: str, prompts_dir: pathlib.Path) -> dict | None:
     """Call claude-sonnet-4-6 with the curation prompt.
 
@@ -612,7 +667,9 @@ def _call_path_a(scrubbed_text: str, prompts_dir: pathlib.Path) -> dict | None:
         }
 
     data: dict | None = None
-    for _attempt in range(PATH_A_NULL_RETRIES + 1):
+    # Holds the first unparseable reply so a later null can't relabel the outcome.
+    unparsed: json.JSONDecodeError | None = None
+    for _attempt in range(PATH_A_RESAMPLES + 1):
         text, tin, tout = _invoke_model(
             MODEL_A, MAX_TOKENS_A, system_prompt, scrubbed_text
         )
@@ -625,39 +682,57 @@ def _call_path_a(scrubbed_text: str, prompts_dir: pathlib.Path) -> dict | None:
         if raw.lower() == "null":
             data = None
             continue  # non-deterministic null — try once more, then give up
+        bad: json.JSONDecodeError | None = None
         try:
             data = json.loads(raw)
-            parsed_ok = True
-        except json.JSONDecodeError:
-            data = None
-            parsed_ok = False
+        except json.JSONDecodeError as exc:
+            bad = exc
+        else:
+            if data is None:
+                continue  # payload was a literal `null` — same as the raw case
+            if not isinstance(data, dict):
+                # Valid JSON of the wrong type (a quoted "null", a list, a
+                # number) parses fine, so it never reaches the except branch —
+                # it used to fall through to the data.update() below and die as
+                # an AttributeError, taking the usage accounting with it. Give
+                # it the same recovery path as an unparseable reply.
+                bad = json.JSONDecodeError(
+                    "model returned JSON that is not an object", raw, 0
+                )
 
-        if parsed_ok and data is None:
-            continue  # payload was a literal `null` — same as the raw "null" case
-
-        if not isinstance(data, dict):
-            # Two shapes land here and both may still carry the artifact: a hard
-            # parse failure (the subscription runtime sometimes echoes transcript
-            # delimiters or prefixes prose around otherwise-valid JSON — fences
-            # not at line start defeat _CODE_FENCE_RE), and valid JSON of the
-            # wrong type (a quoted "null", a list, a number). Salvage the
-            # outermost {...} span before declaring the response malformed — it
+        if bad is not None:
+            # The runtime sometimes wraps otherwise-valid JSON in prose or
+            # transcript echoes (fences not at line start defeat _CODE_FENCE_RE).
+            # Salvage the artifact before declaring the response malformed — it
             # was already paid for.
-            data = _salvage_object(raw)
-
-        if not isinstance(data, dict):
-            # Malformed JSON is not a null; don't retry it (keep the prior
-            # behavior). Attach accumulated usage so the caller's cost log stays
-            # accurate instead of losing it to an AttributeError downstream.
-            _log_error(f"PATH_A malformed_json: {raw[:200]}")
-            exc = json.JSONDecodeError("model returned unusable JSON", raw, 0)
-            exc.usage = _usage()  # type: ignore[attr-defined]
-            raise exc
-
+            salvaged = _salvage_artifact(raw)
+            if salvaged is None:
+                if _attempt < PATH_A_RESAMPLES:
+                    # Resample like a null: an unusable reply is a
+                    # non-deterministic generation failure, not a permanent one.
+                    # Costs one extra input pass on a session already paid for.
+                    # Held, not raised: if a later attempt also fails to produce
+                    # an artifact this is what gets logged, so a malformed reply
+                    # is never erased from log.md by a subsequent null.
+                    unparsed = bad
+                    data = None
+                    continue
+                _log_error(f"PATH_A malformed_json: {raw[:200]}")
+                bad.usage = _usage()  # type: ignore[attr-defined]
+                raise bad
+            data = salvaged
         break  # got an artifact
 
     usage = _usage()
     if data is None:
+        if unparsed is not None:
+            # No artifact, and at least one attempt was unparseable — that is the
+            # notable event, so log it as malformed_json rather than letting a
+            # trailing null relabel it (the malformed_json rate in log.md is the
+            # instrument this failure class is tracked by).
+            _log_error("PATH_A malformed_json: unparseable reply, resample gave null")
+            unparsed.usage = _usage()  # type: ignore[attr-defined]
+            raise unparsed
         return {**usage, "_null": True}
     data.update(usage)
     return data
