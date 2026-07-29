@@ -3,6 +3,8 @@
 import os
 import pathlib
 
+import pytest
+
 
 # ─────────────────────────── helpers ──────────────────────────────────────────
 
@@ -231,6 +233,54 @@ class TestModernTokenFormats:
         out, counts = scrub("github_pat_11ABCDEFG0_abcdefghijklmnopqrstuv")
         assert "github_pat_11ABCDEFG0" not in out
         assert counts["token_prefix"] >= 1
+
+
+class TestBareKeywordEnvVars:
+    """The commonest .env / docker-compose forms: the keyword IS the whole name.
+    A mandatory leading [A-Z] in the key pattern made these unmatchable, so every
+    one of them passed through in clear while `redactions:` reported 0."""
+
+    @pytest.mark.parametrize(
+        "line",
+        [
+            "PASSWORD=s3cr3tvalue",
+            "TOKEN=s3cr3tvalue",
+            "SECRET=s3cr3tvalue",
+            "KEY_ID=s3cr3tvalue",
+            "PASSWORD_HASH=s3cr3tvalue",
+            "export PASSWORD=s3cr3tvalue",
+            "[USER]: TOKEN=s3cr3tvalue",
+        ],
+    )
+    def test_bare_keyword_names_are_redacted(self, line):
+        from scrub import scrub
+
+        out, counts = scrub(line)
+        assert "s3cr3tvalue" not in out
+        assert counts["env_var"] >= 1
+
+
+class TestTokenPrefixFalsePositives:
+    """The widened `sk-` alternative must not eat ordinary hyphenated prose.
+    A greedy sk-[A-Za-z0-9_-]{4,} turned "risk-averse-approach" into
+    "ri<redacted>", silently corrupting the archived note."""
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "risk-averse-approach here",
+            "the task-list-item is long",
+            "disk-usage and task-list.md",
+            "ask-me-anything session",
+            "brisk-walking-pace",
+        ],
+    )
+    def test_hyphenated_words_untouched(self, text):
+        from scrub import scrub
+
+        out, counts = scrub(text)
+        assert out == text
+        assert counts["token_prefix"] == 0
 
 
 class TestAwsSecret:

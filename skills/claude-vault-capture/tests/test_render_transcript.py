@@ -8,6 +8,7 @@ caps tool volume so the enriched input never blows the token guard.
 """
 
 import curate
+import pytest
 from curate import render_transcript
 
 
@@ -209,4 +210,47 @@ class TestReachesCuratorScrubbed:
         assert "[TOOL] Bash:" in text  # command surfaced
         assert "[ERROR] Exit code 1: boom" in text  # failure surfaced
         assert "ghp_abc123DEADBEEF" not in text  # secret scrubbed
-        assert "<redacted:token_prefix>" in text
+        # Any sentinel: `export TOKEN=ghp_…` is claimed by token_prefix first and
+        # then re-covered by env_var (rules apply in order and the later one
+        # rewrites the whole value), so pinning one label tests rule ordering
+        # rather than the property that matters — that nothing leaks.
+        assert "<redacted:" in text
+
+
+class TestSecretsSurviveTruncation:
+    """Tool blocks are capped (_BASH_CMD_CAP, _ERROR_CAP, CAPTURE_SUCCESS_HEAD_CHARS).
+    Capping BEFORE scrubbing defeated the scrubber outright: private_key needs its
+    -----END----- terminator and AIza…/AKIA… need their full body, so a cut secret
+    matched nothing and reached the model and the note in clear.
+    """
+
+    PEM = (
+        "-----BEGIN OPENSSH PRIVATE KEY-----\n"
+        + ("b3BlbnNzaC1rZXktdjEAAAAA" * 40)
+        + "\n-----END OPENSSH PRIVATE KEY-----"
+    )
+
+    def _blocks_for(self, kind):
+        if kind == "error":
+            return [{"type": "tool_result", "is_error": True, "content": "auth failed " + self.PEM}]
+        if kind == "out":
+            return [{"type": "tool_result", "content": "cat id_ed25519\n" + self.PEM}]
+        if kind == "bash":
+            return [{"type": "tool_use", "name": "Bash", "input": {"command": "echo '" + self.PEM + "'"}}]
+        return [{"type": "tool_use", "name": "Write", "input": {"file_path": "/k", "content": self.PEM}}]
+
+    @pytest.mark.parametrize("kind", ["error", "out", "bash", "write"])
+    def test_pem_never_survives_a_capped_block(self, kind):
+        out = render_transcript([_msg("user", "", self._blocks_for(kind))])
+        assert "b3BlbnNzaC1rZXktdjEA" not in out, f"key body leaked via [{kind}]"
+        assert "PRIVATE KEY" not in out
+
+    def test_length_anchored_token_survives_a_long_command(self):
+        cmd = "x" * 320 + " AIza" + "B" * 35
+        blocks = [{"type": "tool_use", "name": "Bash", "input": {"command": cmd}}]
+        assert "AIza" + "B" * 35 not in render_transcript([_msg("user", "", blocks)])
+
+    def test_redaction_counts_reach_the_caller(self):
+        counts = {}
+        render_transcript([_msg("user", "", self._blocks_for("error"))], counts)
+        assert counts.get("private_key", 0) >= 1, "counts must not silently vanish"

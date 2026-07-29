@@ -164,6 +164,22 @@ def _strip_fences(text: str) -> str:
 _ARTIFACT_KEYS = frozenset({"title", "type", "body"})
 
 
+def _is_artifact(obj) -> bool:
+    """True when *obj* satisfies the artifact contract: the three keys, as strings.
+
+    Applied to the directly-parsed reply as well as to salvaged objects. The
+    write path substitutes defaults for missing fields but assumes strings for
+    the ones present, so a `body` that arrives as a dict or a `title` as a number
+    raises mid-write — after the model call is already paid for, and before
+    _append_index/append_log run, which loses the session with no log.md row at
+    all. Rejecting it here routes it through the normal resample-then-
+    malformed_json path, which is logged.
+    """
+    return isinstance(obj, dict) and all(
+        isinstance(obj.get(k), str) for k in _ARTIFACT_KEYS
+    )
+
+
 def _salvage_artifact(raw: str) -> dict | None:
     """Extract the artifact object from a reply that isn't bare JSON.
 
@@ -191,9 +207,7 @@ def _salvage_artifact(raw: str) -> dict | None:
             # exhaust the stack, and letting that escape would drop the usage
             # accounting the caller attaches on the way out.
             continue
-        if isinstance(obj, dict) and all(
-            isinstance(obj.get(k), str) for k in _ARTIFACT_KEYS
-        ):
+        if _is_artifact(obj):
             found = obj
     return found
 
@@ -690,14 +704,16 @@ def _call_path_a(scrubbed_text: str, prompts_dir: pathlib.Path) -> dict | None:
         else:
             if data is None:
                 continue  # payload was a literal `null` — same as the raw case
-            if not isinstance(data, dict):
-                # Valid JSON of the wrong type (a quoted "null", a list, a
-                # number) parses fine, so it never reaches the except branch —
-                # it used to fall through to the data.update() below and die as
-                # an AttributeError, taking the usage accounting with it. Give
-                # it the same recovery path as an unparseable reply.
+            if not _is_artifact(data):
+                # Parses fine but does not satisfy the contract: the wrong type
+                # entirely (a quoted "null", a list, a number), or an object
+                # whose title/body/type is not a string. Neither reaches the
+                # except branch, and both used to fall through to the write path
+                # and die there — as an AttributeError or a TypeError — after
+                # the call was paid for and before anything was logged. Give
+                # them the same recovery path as an unparseable reply.
                 bad = json.JSONDecodeError(
-                    "model returned JSON that is not an object", raw, 0
+                    "model reply is not an artifact-shaped object", raw, 0
                 )
 
         if bad is not None:
@@ -810,23 +826,50 @@ def _tool_result_text(block: dict) -> str:
     return c if isinstance(c, str) else ""
 
 
-def _render_tool_use(block: dict) -> str:
+def _scrub_cap(text: str, cap: int, counts: dict[str, int] | None) -> str:
+    """Scrub *text*, then truncate to *cap* — in that order, never the reverse.
+
+    Truncating first defeats the scrubber outright: the private_key rule needs
+    its closing -----END … PRIVATE KEY----- to match, and the length-anchored
+    token rules (AIza…{35}, AKIA…{16}) need their full body. A cap that lands
+    mid-secret leaves a fragment no rule matches, and that fragment is what
+    would reach the model and the note. Redaction counts are accumulated into
+    *counts* so the artifact's `redactions:` total still reflects what was
+    caught here rather than under-reporting it.
+    """
+    import scrub as scrub_mod
+
+    scrubbed, found = scrub_mod.scrub(text)
+    if counts is not None:
+        for name, n in found.items():
+            counts[name] = counts.get(name, 0) + n
+    return scrubbed[:cap]
+
+
+def _render_tool_use(block: dict, counts: dict[str, int] | None = None) -> str:
     """Render one tool_use block as a compact `[TOOL] …` line."""
     name = block.get("name", "tool")
     inp = block.get("input", {}) or {}
     if name == "Bash":
-        return f"[TOOL] Bash: {str(inp.get('command', ''))[:_BASH_CMD_CAP]}"
+        cmd = _scrub_cap(str(inp.get("command", "")), _BASH_CMD_CAP, counts)
+        return f"[TOOL] Bash: {cmd}"
     if name in ("Edit", "MultiEdit"):
         diff = f"{inp.get('old_string', '')} -> {inp.get('new_string', '')}"
-        return f"[TOOL] {name}: {inp.get('file_path', '')} | {diff[:_EDIT_DIFF_CAP]}"
+        return (
+            f"[TOOL] {name}: {inp.get('file_path', '')} | "
+            f"{_scrub_cap(diff, _EDIT_DIFF_CAP, counts)}"
+        )
     if name == "Write":
-        body = str(inp.get("content", ""))[:_EDIT_DIFF_CAP]
+        body = _scrub_cap(str(inp.get("content", "")), _EDIT_DIFF_CAP, counts)
         return f"[TOOL] Write: {inp.get('file_path', '')} | {body}"
     # Any other tool: name + a compact slice of its input for context.
-    return f"[TOOL] {name}: {json.dumps(inp, default=str)[:_OTHER_INPUT_CAP]}"
+    blob = _scrub_cap(json.dumps(inp, default=str), _OTHER_INPUT_CAP, counts)
+    return f"[TOOL] {name}: {blob}"
 
 
-def render_transcript(messages: list[dict]) -> str:
+def render_transcript(
+    messages: list[dict], redactions: dict[str, int] | None = None
+) -> str:
     """Build the curator's input text from loaded messages.
 
     Each message's text becomes `[ROLE]: <text>`. When raw content `blocks` are
@@ -840,6 +883,10 @@ def render_transcript(messages: list[dict]) -> str:
     further tool_use / [OUT] lines are dropped (text and [ERROR] still emitted), so
     the enriched transcript stays under the token guard on pathological runs. The
     text-only `content` the filters read is untouched — only the model input grows.
+
+    Every tool-derived string is scrubbed BEFORE its length cap is applied (see
+    _scrub_cap); pass a dict as *redactions* to collect what those scrubs caught,
+    since the caller's own scrub of the finished text cannot see them.
     """
     budget = int(os.environ.get("CAPTURE_TOOL_CHARS_BUDGET", "30000"))
     head = int(os.environ.get("CAPTURE_SUCCESS_HEAD_CHARS", "200"))
@@ -861,7 +908,7 @@ def render_transcript(messages: list[dict]) -> str:
             if btype == "text":
                 parts.append(b.get("text", ""))
             elif btype == "tool_use":
-                rendered = _render_tool_use(b)
+                rendered = _render_tool_use(b, redactions)
                 if used + len(rendered) <= budget:
                     parts.append(rendered)
                     used += len(rendered)
@@ -870,11 +917,11 @@ def render_transcript(messages: list[dict]) -> str:
                 if not text:
                     continue  # nothing to surface (e.g. image-only / empty result)
                 if b.get("is_error"):
-                    rendered = f"[ERROR] {text[:_ERROR_CAP]}"
+                    rendered = f"[ERROR] {_scrub_cap(text, _ERROR_CAP, redactions)}"
                     parts.append(rendered)  # errors always kept
                     used += len(rendered)
                 elif head > 0 and used < budget:
-                    rendered = f"[OUT] {text[:head]}"
+                    rendered = f"[OUT] {_scrub_cap(text, head, redactions)}"
                     parts.append(rendered)
                     used += len(rendered)
         parts = [p for p in parts if p]
@@ -916,8 +963,14 @@ def run_capture(
     # render_transcript surfaces tool activity ([TOOL]/[OUT]/[ERROR]) for the model;
     # scrub still runs on the full assembled text, so secrets in commands/output are
     # redacted exactly as prose is.
-    raw_text = render_transcript(transcript)
+    # Tool blocks are scrubbed inside render (before their length caps chop a
+    # secret into an unmatchable fragment); those counts come back here so the
+    # artifact's `redactions:` total covers them too.
+    tool_redactions: dict[str, int] = {}
+    raw_text = render_transcript(transcript, tool_redactions)
     scrubbed_text, redactions = scrub_mod.scrub(raw_text)
+    for _name, _n in tool_redactions.items():
+        redactions[_name] = redactions.get(_name, 0) + _n
 
     # ── 2–5. pre-flight skips (excluded command / threshold / tokens / dedup) ─
     if uses_excluded_command(transcript):
@@ -971,12 +1024,19 @@ def run_capture(
     if result_a:
         result_a["title"], _ = scrub_mod.scrub(result_a.get("title", ""))
         result_a["body"], _ = scrub_mod.scrub(result_a.get("body", ""))
-        result_a["tags"] = [
-            scrub_mod.scrub(str(t))[0] for t in result_a.get("tags", [])
-        ]
-        result_a["source_links"] = [
-            scrub_mod.scrub(lnk)[0] for lnk in result_a.get("source_links", [])
-        ]
+        _tags = result_a.get("tags", [])
+        result_a["tags"] = (
+            [scrub_mod.scrub(str(t))[0] for t in _tags] if isinstance(_tags, list) else []
+        )
+        # str() the elements and tolerate a non-list: these come straight from the
+        # model, and a non-string element here would raise inside scrub() after
+        # the call was already paid for.
+        _links = result_a.get("source_links", [])
+        result_a["source_links"] = (
+            [scrub_mod.scrub(str(lnk))[0] for lnk in _links]
+            if isinstance(_links, list)
+            else []
+        )
 
     # ── 9 & 10. sanitize title + write Path A ────────────────────────────────
     path_a_rel: str | None = None
@@ -999,7 +1059,7 @@ def run_capture(
             redactions=redactions,
             # model tags are scrubbed (step 8) then slug-coerced; empties drop out
             tags=["claude-code", "curated"]
-            + [s for s in (sanitize_tag(t) for t in result_a.get("tags", [])[:10]) if s],
+            + [s for s in (sanitize_tag(t) for t in result_a["tags"][:10]) if s],
             body=result_a.get("body", ""),
             source_links=result_a.get("source_links", []),
         )

@@ -16,7 +16,12 @@ HOOKS_LOG="$HOME/.claude/hooks.log"
 # must not be treated as a usable credential. stat -f is macOS/BSD, -c is GNU.
 _read_secret_file() {
     local f="$1" perms
-    perms="$(stat -f '%Lp' "$f" 2>/dev/null || stat -c '%a' "$f" 2>/dev/null)" || return 1
+    # -L follows symlinks: a token symlinked to a 600 file would otherwise be
+    # stat'd as the link itself (777 on macOS) and refused, with a chmod hint
+    # that cannot fix it. GNU -c is probed FIRST because BSD stat rejects it
+    # cleanly (rc=1, empty), whereas GNU stat treats -f as "filesystem" and
+    # prints a multi-line blob that would land in hooks.log as the mode.
+    perms="$(stat -L -c '%a' "$f" 2>/dev/null || stat -L -f '%Lp' "$f" 2>/dev/null)" || return 1
     if [[ "$perms" != *00 ]]; then
         printf 'CAPTURE_TOKEN_FILE_PERMS\t%s\t%s is mode %s (group/other-readable) — refusing to use it; run: chmod 600 %s\n' \
             "${NOW:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}" "$f" "$perms" "$f" >> "$HOOKS_LOG"
@@ -83,8 +88,17 @@ TRANSCRIPT_PATH=$(echo "$HOOK_JSON" | python3 -c "import json,sys; d=json.load(s
 SESSION_ID=$(echo "$HOOK_JSON" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('session_id',''))" 2>/dev/null || true)
 CWD=$(echo "$HOOK_JSON" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('cwd',''))" 2>/dev/null || true)
 
-# Guard: if we couldn't parse the fields, bail silently
+# Guard: if we couldn't parse the fields, log why and bail. This also covers a
+# missing python3 (the three extractions above all fail silently), which would
+# otherwise be indistinguishable from "the hook never fired" in hooks.log.
 if [[ -z "$SESSION_ID" || -z "$TRANSCRIPT_PATH" ]]; then
+    if command -v python3 >/dev/null 2>&1; then
+        printf 'CAPTURE_HOOK_JSON_UNPARSED\t%s\tno session_id/transcript_path in hook JSON\n' \
+            "$NOW" >> "$HOOKS_LOG"
+    else
+        printf 'CAPTURE_NO_PYTHON3\t%s\tpython3 not on PATH — cannot parse the hook payload\n' \
+            "$NOW" >> "$HOOKS_LOG"
+    fi
     exit 0
 fi
 
@@ -134,8 +148,11 @@ if [[ -n "${CLAUDE_PLUGIN_ROOT:-}" ]]; then
     # walks UP, so it would describe whatever repo encloses the plugin (the
     # marketplace clone, or an unrelated repo someone vendored it into) and
     # compare against THAT repo's origin/main, reporting false STALE_DEPLOYs.
+    # `|| true`: under `set -euo pipefail` a missing/unreadable plugin.json makes
+    # sed exit non-zero, and that would abort the hook — skipping the capture
+    # entirely over a cosmetic log line. ${...:-unknown} covers the empty result.
     PLUGIN_VERSION="$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
-        "$REPO/.claude-plugin/plugin.json" 2>/dev/null | head -1)"
+        "$REPO/.claude-plugin/plugin.json" 2>/dev/null | head -1 || true)"
     printf 'CAPTURE_DEPLOY\tv%s\tplugin\t%s\n' "${PLUGIN_VERSION:-unknown}" \
         "$NOW" >> "$HOOKS_LOG"
 else
@@ -154,10 +171,13 @@ else
         "$NOW" >> "$HOOKS_LOG"
 fi
 
-# Choose the interpreter. A pre-built .venv (standalone/dev `uv sync`) wins; an
-# installed plugin has none, so fall back to `uv run` with the PEP 723 deps
-# declared in curate.py. Subscription mode adds the Agent SDK on top.
-if [[ -x "$VENV_PYTHON" ]]; then
+# Choose the interpreter. A pre-built .venv (standalone/dev `uv sync`) wins, but
+# ONLY outside a plugin install: running `uv sync` inside an installed plugin (as
+# the README's own Tests section invites) leaves a .venv holding just the dev
+# group, which would then shadow the PEP 723 deps and silently break subscription
+# mode — that venv has no claude-agent-sdk, and `--with` is only passed on the uv
+# path. An installed plugin therefore always goes through `uv run`.
+if [[ -z "${CLAUDE_PLUGIN_ROOT:-}" && -x "$VENV_PYTHON" ]]; then
     RUN=("$VENV_PYTHON" "$CURATE")
 elif command -v uv >/dev/null 2>&1; then
     # Build RUN incrementally: expanding an empty array via "${ARR[@]}" is an

@@ -15,12 +15,16 @@ RULES = [
     },
     {
         "name": "token_prefix",
-        # sk- consumes _ and - too: modern OpenAI keys are sk-proj-…/sk-svcacct-…,
-        # and a charset stopping at the first dash used to redact only the public
-        # "sk-proj" prefix while the whole key body stayed in clear.
+        # sk- must reach past the vendor segment: modern OpenAI keys are
+        # sk-proj-…/sk-svcacct-…, and a charset stopping at the first dash used to
+        # redact only the public "sk-proj" prefix while the key body stayed in
+        # clear. It does NOT take `-` in the body, and it requires a word boundary
+        # plus a 16-char body, because a greedy `sk-[A-Za-z0-9_\-]{4,}` matches
+        # inside ordinary hyphenated prose — "risk-averse-approach" became
+        # "ri<redacted>" — which silently mangles the archived note.
         "pattern": (
             r"sk-ant-[A-Za-z0-9_\-]+"
-            r"|sk-[A-Za-z0-9_\-]{4,}"
+            r"|(?<![A-Za-z0-9])sk-(?:proj-|svcacct-|admin-)?[A-Za-z0-9_]{16,}"
             r"|github_pat_[A-Za-z0-9_]+"
             r"|gh[pousr]_[A-Za-z0-9]+"
             r"|xox[baprs]-[0-9]+-[A-Za-z0-9\-]+"
@@ -48,7 +52,10 @@ RULES = [
         "pattern": (
             r"(?:^|(?<=[\s:;\"'`(]))"
             r"(?P<pre>(?:export[ \t]+|set[ \t]+|env[ \t]+)?"
-            r"(?P<k>[A-Z][A-Z0-9_]*(?:KEY|TOKEN|SECRET|PASSWORD|PASS|PWD|CREDENTIAL|API)[A-Z0-9_]*)"
+            # No mandatory leading [A-Z]: with one, the keyword could never start
+            # at offset 0 of the name, so the commonest bare forms — PASSWORD=,
+            # TOKEN=, SECRET=, PASS= — were never redacted at all.
+            r"(?P<k>[A-Z0-9_]*(?:KEY|TOKEN|SECRET|PASSWORD|PASS|PWD|CREDENTIAL|API)[A-Z0-9_]*)"
             r"[ \t]*=[ \t]*)"
             r"(?P<v>\"[^\"\n]*\"|'[^'\n]*'|[^\s#]+)"
         ),

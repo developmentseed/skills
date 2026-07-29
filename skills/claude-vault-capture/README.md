@@ -15,6 +15,7 @@ Nothing runs synchronously on session close (the hook returns in well under 200 
 
 - Claude Code CLI, installed and in use
 - [`uv`](https://docs.astral.sh/uv/) on your `PATH` — the hook launches the Python worker with `uv run`, which builds and caches its environment on first capture (no manual dependency install)
+- `python3` on your `PATH` — used to parse the hook payload (present by default on macOS and most Linux distributions)
 - An Obsidian vault (any location — you point the plugin at it during install)
 - An `ANTHROPIC_API_KEY`, **or** a Claude Pro/Max subscription (see [Subscription mode](#subscription-mode))
 
@@ -92,7 +93,8 @@ To stop the pipeline from archiving an extension's own workflow sessions, set `C
 
 ## Tests
 
-The Python pipeline ships with its test suite (no network, no API key needed):
+The Python pipeline ships with its test suite (no network, no API key needed).
+Run it from a **clone of the repo**, not from an installed plugin directory:
 
 ```bash
 uv sync          # dev/test deps

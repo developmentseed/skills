@@ -43,17 +43,29 @@ def _build_plugin(home: pathlib.Path) -> pathlib.Path:
     bindir = home / "bin"
     bindir.mkdir()
     stub = bindir / "uv"
+    # Writes to a temp file and renames as its LAST action: rename is atomic on
+    # the same filesystem, so _wait_for seeing the path implies the whole record
+    # is there. Polling the final path directly raced the 9 separate printfs and
+    # could read a half-written file.
+    # The timeout probe distinguishes unset from set-and-empty (${x:-} would
+    # collapse them, and "unset vs empty" is exactly what one test asserts).
     stub.write_text(
         "#!/usr/bin/env bash\n"
         f'INV="{invocation}"\n'
-        'printf "ARGV:%s\\n" "$*" > "$INV"\n'
-        'printf "CAPTURE_VAULT_DIR=%s\\n" "${CAPTURE_VAULT_DIR:-}" >> "$INV"\n'
-        'printf "CAPTURE_STATE_DIR=%s\\n" "${CAPTURE_STATE_DIR:-}" >> "$INV"\n'
-        'printf "SCRUB_FAILURES_PATH=%s\\n" "${SCRUB_FAILURES_PATH:-}" >> "$INV"\n'
-        'printf "CAPTURE_USE_SUBSCRIPTION=%s\\n" "${CAPTURE_USE_SUBSCRIPTION:-}" >> "$INV"\n'
-        'printf "CAPTURE_TIMEOUT_SECONDS=%s\\n" "${CAPTURE_TIMEOUT_SECONDS:-unset}" >> "$INV"\n'
-        'printf "ANTHROPIC_API_KEY=%s\\n" "${ANTHROPIC_API_KEY:-}" >> "$INV"\n'
-        'printf "CLAUDE_CODE_OAUTH_TOKEN=%s\\n" "${CLAUDE_CODE_OAUTH_TOKEN:-}" >> "$INV"\n'
+        'TMP="$INV.tmp"\n'
+        'printf "ARGV:%s\\n" "$*" > "$TMP"\n'
+        'printf "CAPTURE_VAULT_DIR=%s\\n" "${CAPTURE_VAULT_DIR:-}" >> "$TMP"\n'
+        'printf "CAPTURE_STATE_DIR=%s\\n" "${CAPTURE_STATE_DIR:-}" >> "$TMP"\n'
+        'printf "SCRUB_FAILURES_PATH=%s\\n" "${SCRUB_FAILURES_PATH:-}" >> "$TMP"\n'
+        'printf "CAPTURE_USE_SUBSCRIPTION=%s\\n" "${CAPTURE_USE_SUBSCRIPTION:-}" >> "$TMP"\n'
+        'if [ -z "${CAPTURE_TIMEOUT_SECONDS+x}" ]; then\n'
+        '  printf "CAPTURE_TIMEOUT_SECONDS=UNSET\\n" >> "$TMP"\n'
+        "else\n"
+        '  printf "CAPTURE_TIMEOUT_SECONDS=SET[%s]\\n" "$CAPTURE_TIMEOUT_SECONDS" >> "$TMP"\n'
+        "fi\n"
+        'printf "ANTHROPIC_API_KEY=%s\\n" "${ANTHROPIC_API_KEY:-}" >> "$TMP"\n'
+        'printf "CLAUDE_CODE_OAUTH_TOKEN=%s\\n" "${CLAUDE_CODE_OAUTH_TOKEN:-}" >> "$TMP"\n'
+        'mv "$TMP" "$INV"\n'
         "exit 0\n"
     )
     stub.chmod(0o755)
@@ -186,7 +198,7 @@ class TestTimeoutOption:
 
         assert proc.returncode == 0, proc.stderr
         assert _wait_for(invocation)
-        assert "CAPTURE_TIMEOUT_SECONDS=120" in invocation.read_text()
+        assert "CAPTURE_TIMEOUT_SECONDS=SET[120]" in invocation.read_text()
 
     def test_unset_option_leaves_env_unset_not_empty(self, tmp_path):
         """An empty export would make int("") raise inside curate.py."""
@@ -198,7 +210,7 @@ class TestTimeoutOption:
 
         assert proc.returncode == 0, proc.stderr
         assert _wait_for(invocation)
-        assert "CAPTURE_TIMEOUT_SECONDS=unset" in invocation.read_text()
+        assert "CAPTURE_TIMEOUT_SECONDS=UNSET" in invocation.read_text()
 
     def test_non_numeric_option_is_rejected_and_logged(self, tmp_path):
         home = tmp_path / "home"
@@ -211,7 +223,7 @@ class TestTimeoutOption:
 
         assert proc.returncode == 0, proc.stderr
         assert _wait_for(invocation), "junk config must not stop the capture"
-        assert "CAPTURE_TIMEOUT_SECONDS=unset" in invocation.read_text()
+        assert "CAPTURE_TIMEOUT_SECONDS=UNSET" in invocation.read_text()
         assert "CAPTURE_BAD_TIMEOUT" in (home / ".claude" / "hooks.log").read_text()
 
 
