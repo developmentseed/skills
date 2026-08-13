@@ -10,9 +10,9 @@ This skill leverages the official GitHub CLI (`gh`) to fetch issue data and conv
 ## Environment & Compatibility
 
 > [!IMPORTANT]
-> **Local-First Skill**: This skill works best with **Claude Code** running on your local machine where `gh` is already authenticated.
+> **Needs an authenticated `gh`.** This skill shells out to the GitHub CLI, so it runs where `gh` is installed and logged in — Claude Code on your own machine is the normal case.
 >
-> **Claude.ai Web Interface**: The web sandbox cannot run interactive `gh auth login`. Use the **Copy-Paste Fallback** below.
+> The **claude.ai web sandbox** cannot run an interactive `gh auth login`; there, use the **Copy-Paste Fallback** below.
 
 ## Copy-Paste Fallback (for Claude Web)
 
@@ -32,7 +32,7 @@ If you're using Claude on the web or don't have `gh` installed:
 gh issue list -R owner/repo --limit 5 --json title,body,author,createdAt,comments,url
 ```
 
-## Prerequisites (Local Mode)
+## Prerequisites (running the script yourself)
 
 1.  **GitHub CLI (`gh`)**: Must be installed on your system.
 2.  **Authentication**: You must be logged in. Run `./run.sh --auth` if you need to sign in.
