@@ -5,71 +5,101 @@ description: Exports a GitHub Issue (including comments and private issues) to a
 
 # GitHub Issue to Markdown
 
-Fetches GitHub issues (including from private repos) using the `gh` CLI and converts them into structured Markdown files with metadata, description, and threaded comments.
+This skill leverages the official GitHub CLI (`gh`) to fetch issue data and converts it into a structured Markdown file.
 
-## Prerequisites
+## Environment & Compatibility
 
-1. **GitHub CLI (`gh`)**: Must be installed. See [cli.github.com](https://cli.github.com/).
-2. **Authentication**: You must be logged in via `gh auth login`. The skill will check for you and prompt if not authenticated.
-3. **Multiple accounts**: If you use more than one GitHub account (e.g. work and personal), `gh` supports multiple logins. Use the `--user` flag to specify which account to use for a given export.
+> [!IMPORTANT]
+> **Local-First Skill**: This skill works best with **Claude Code** running on your local machine where `gh` is already authenticated.
+>
+> **Claude.ai Web Interface**: The web sandbox cannot run interactive `gh auth login`. Use the **Copy-Paste Fallback** below.
+
+## Copy-Paste Fallback (for Claude Web)
+
+If you're using Claude on the web or don't have `gh` installed:
+
+1. **Run this command locally** (replace the URL with your issue):
+   ```bash
+   gh issue view "https://github.com/owner/repo/issues/123" --json title,body,author,createdAt,comments,url
+   ```
+
+2. **Copy the JSON output** and paste it into Claude.
+
+3. **Tell Claude**: "Convert this GitHub issue JSON to Markdown using the github-issue-to-markdown format."
+
+**For multiple issues**, run for each issue and paste all JSON objects, or use:
+```bash
+gh issue list -R owner/repo --limit 5 --json title,body,author,createdAt,comments,url
+```
+
+## Prerequisites (Local Mode)
+
+1.  **GitHub CLI (`gh`)**: Must be installed on your system.
+2.  **Authentication**: You must be logged in. Run `./run.sh --auth` if you need to sign in.
+3.  **Multiple Accounts**: The script uses whichever account `gh` is currently authenticated as (or `GH_TOKEN` if set). To use a different account for a run, set the token yourself: `export GH_TOKEN=$(gh auth token --user <login>)`.
 
 ## Usage
 
-**Export a single issue:**
-```bash
-./run.sh "https://github.com/owner/repo/issues/123"
-```
+1.  **Export a Single Issue**:
+    Provide the full URL of the GitHub issue.
+    ```bash
+    ./run.sh "https://github.com/owner/repo/issues/123"
+    ```
 
-**Export with comments:**
-```bash
-./run.sh --comments "https://github.com/owner/repo/issues/123"
-```
+2.  **Export Search Results**:
+    Provide a GitHub search URL. By default, it exports the first 5 issues without comments.
+    ```bash
+    ./run.sh "https://github.com/owner/repo/issues?q=is:issue+state:open"
+    ```
 
-**Export search results:**
-```bash
-./run.sh "https://github.com/owner/repo/issues?q=is:issue+state:open"
-```
-
-**Options:**
-- `--limit N`: Maximum number of issues to export from search results (default: 5)
-- `--comments`: Include comments in the output (off by default)
-- `--user USERNAME`: Use a specific authenticated GitHub account
-- `--auth`: Run `gh auth login` interactively
-
-## Output
-
-Exports are saved to an `output/` folder (gitignored) as timestamped Markdown files with:
-- Metadata (title, author, date, URL)
-- Issue description
-- Threaded comments with author attribution and timestamps (if `--comments` used)
-- Emoji reactions on issues and comments
+3.  **Options**:
+    - `--limit N`: Specify the maximum number of issues to export (default: 5).
+    - `--comments`: Include comments in the markdown output (off by default).
 
 ## Agent Instructions
 
 When a user asks to export an issue:
 
 ### If `gh` is available and authenticated:
-1. Check access. If the repo is private or access is denied, ask which GitHub account to use.
-2. Use the `--user` flag to switch accounts if needed.
-3. Always use `--comments` unless the user specifically says not to, comments often contain the most important context.
+1.  **Check the active account**: Run `gh api user --jq '.login'` to see who `gh` is authenticated as.
+2.  **Access denied?** Never run `gh auth switch` or `gh auth login` yourself — account state belongs to the user. Instead, tell the user which account is active and ask them to point `GH_TOKEN` at the right one, then re-run:
+    ```bash
+    export GH_TOKEN=$(gh auth token --user <login>)
+    ```
 
 ### If in a restricted environment (Claude web) or `gh` is unavailable:
-1. Guide the user to run locally:
-   ```bash
-   gh issue view "ISSUE_URL" --json title,body,author,createdAt,comments,reactionGroups,url
-   ```
-2. Process pasted JSON into the standard Markdown format.
+1.  **Detect the limitation**: If `gh` is not installed, not authenticated, or network access is blocked.
+2.  **Guide the user**: Provide the exact command they need to run locally:
+    ```bash
+    gh issue view "ISSUE_URL" --json title,body,author,createdAt,comments,url
+    ```
+3.  **Process pasted JSON**: When the user pastes JSON, format it into Markdown following the standard output format (metadata header, description, comments with author/timestamp).
+4.  **Output format** should match:
+    ```markdown
+    ## Issue Title
+
+    - **Author:** @username
+    - **Created:** YYYY-MM-DD HH:MM:SS
+    - **URL:** https://github.com/...
+
+    ### Description
+
+    [issue body]
+
+    ### Comments
+
+    #### @commenter commented on YYYY-MM-DD HH:MM:SS
+
+    [comment body]
+
+    ---
+    ```
 
 ## How it Works
 
-1. Checks `gh` authentication status
-2. Uses `gh issue view --json` to fetch issue data (title, body, author, comments, reactions)
-3. A Python script (`scripts/export_issue.py`) converts the JSON to structured Markdown
-4. Output is saved with a timestamped filename
-
-## Packaging for Claude
-
-To zip this skill for upload to Claude web:
-```bash
-zip -r github-issue-to-markdown.zip github-issue-to-markdown/ -x "*/.venv/*" "*/output/*" "*/.env" "*/__pycache__/*" "*/.DS_Store"
-```
+1.  The skill first checks if `gh` is authenticated.
+2.  It uses `gh issue view --json` to fetch the title, body, author, and all comments.
+3.  A Python script (`scripts/export_issue.py`) processes the JSON and generates a Markdown file with:
+    - Metadata (Title, Author, Date, URL)
+    - The original issue description
+    - A threaded view of all comments with author attribution and timestamps.
