@@ -1,5 +1,5 @@
 {
   "name": "github-issue-to-markdown",
-  "description": "Exports GitHub Issues to structured Markdown using the gh CLI",
-  "version": "1.0.0"
+  "description": "Exports a GitHub Issue (including comments and private issues) to a clean Markdown file using the GitHub CLI (`gh`). Use when asked to archive, export, or save a GitHub issue.",
+  "version": "1.1.1"
 }
