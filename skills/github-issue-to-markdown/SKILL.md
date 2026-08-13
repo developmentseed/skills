@@ -56,6 +56,16 @@ gh issue list -R owner/repo --limit 5 --json title,body,author,createdAt,comment
     - `--limit N`: Specify the maximum number of issues to export (default: 5).
     - `--comments`: Include comments in the markdown output (off by default).
 
+4.  **Where files land**: `./output/` under the directory you ran the command
+    from — not under the skill's own directory. Set `GH_ISSUE_OUTPUT_DIR` to
+    send every export to one fixed folder instead:
+    ```bash
+    export GH_ISSUE_OUTPUT_DIR=~/Documents/github-issue-exports
+    ```
+    (When a skill is installed as a plugin it runs from a versioned cache
+    directory; anything written next to the script is stranded there on the
+    next version bump. Hence caller-relative by default.)
+
 ## Agent Instructions
 
 When a user asks to export an issue:

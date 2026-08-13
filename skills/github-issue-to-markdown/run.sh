@@ -1,9 +1,17 @@
 #!/usr/bin/env bash
 set -euo pipefail
+
+# Capture where the caller is BEFORE cd-ing to the skill dir: when installed
+# as a plugin, "next to the script" is a versioned cache directory — exports
+# there are stranded on every version bump and deleted by cache cleanups
+CALLER_PWD="$(pwd)"
 cd "$(dirname "$0")"
 
 # --- Output directory ---
-mkdir -p output
+# Default: ./output under the directory you ran from. Override with
+# GH_ISSUE_OUTPUT_DIR for a fixed home that survives everything.
+OUTPUT_DIR="${GH_ISSUE_OUTPUT_DIR:-$CALLER_PWD/output}"
+mkdir -p "$OUTPUT_DIR"
 
 # --- Auth shortcut ---
 if [[ "${1:-}" == "--auth" ]]; then
@@ -48,7 +56,6 @@ access_help() {
 
 echo "Fetching data (as $CURRENT_USER)..."
 
-OUTPUT_DIR="$(pwd)/output"
 TEMP_JSON="$(mktemp)"
 trap 'rm -f "$TEMP_JSON"' EXIT
 
