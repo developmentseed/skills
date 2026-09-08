@@ -1,0 +1,27 @@
+name: cloud-native-geo freshness check
+
+on:
+  schedule:
+    # 09:00 UTC every Monday
+    - cron: "0 9 * * 1"
+  workflow_dispatch: {}
+
+permissions:
+  issues: write
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - run: pip install pyyaml
+
+      - env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: python .github/scripts/check_cloud_native_geo_freshness.py
