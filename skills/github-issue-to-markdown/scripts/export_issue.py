@@ -1,6 +1,5 @@
 import json
 import argparse
-import os
 from datetime import datetime
 
 # Mapping GitHub reaction types to emojis
@@ -19,7 +18,7 @@ def format_date(date_str):
     try:
         dt = datetime.fromisoformat(date_str.replace('Z', '+00:00'))
         return dt.strftime('%Y-%m-%d %H:%M:%S')
-    except:
+    except (ValueError, AttributeError):
         return date_str
 
 def format_reactions(reaction_groups):

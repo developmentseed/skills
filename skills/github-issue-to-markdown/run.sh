@@ -1,25 +1,31 @@
-#!/bin/bash
+#!/usr/bin/env bash
+set -euo pipefail
 
-# Get the directory of the script
-DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
-OUTPUT_DIR="$DIR/output"
-TEMP_JSON="$DIR/temp_issue.json"
+# Capture where the caller is BEFORE cd-ing to the skill dir: when installed
+# as a plugin, "next to the script" is a versioned cache directory — exports
+# there are stranded on every version bump and deleted by cache cleanups
+CALLER_PWD="$(pwd)"
+cd "$(dirname "$0")"
 
+# --- Output directory ---
+# Default: ./output under the directory you ran from. Override with
+# GH_ISSUE_OUTPUT_DIR for a fixed home that survives everything.
+OUTPUT_DIR="${GH_ISSUE_OUTPUT_DIR:-$CALLER_PWD/output}"
 mkdir -p "$OUTPUT_DIR"
 
-if [[ "$1" == "--auth" ]]; then
+# --- Auth shortcut ---
+if [[ "${1:-}" == "--auth" ]]; then
     gh auth login
     exit 0
 fi
 
-# Default values
+# --- Parse arguments ---
 LIMIT=5
 INCLUDE_COMMENTS="false"
-USERNAME=""
+ISSUE_REF=""
 
 while [[ "$#" -gt 0 ]]; do
     case $1 in
-        --user) USERNAME="$2"; shift ;;
         --limit) LIMIT="$2"; shift ;;
         --comments) INCLUDE_COMMENTS="true" ;;
         -*) echo "Unknown option: $1"; exit 1 ;;
@@ -28,32 +34,41 @@ while [[ "$#" -gt 0 ]]; do
     shift
 done
 
-if [[ -n "$USERNAME" ]]; then
-    echo "Switching to GitHub account: $USERNAME"
-    gh auth switch --user "$USERNAME"
-    if [[ $? -ne 0 ]]; then
-        echo "Error: Failed to switch to account '$USERNAME'. Make sure it is logged in."
-        exit 1
-    fi
-fi
-
 if [[ -z "$ISSUE_REF" ]]; then
-    echo "Usage: $0 [--user USERNAME] [--limit LIMIT] [--comments] <ISSUE_URL_OR_SEARCH_URL>"
+    echo "Usage: $0 [--limit LIMIT] [--comments] <ISSUE_URL_OR_SEARCH_URL>"
     exit 1
 fi
 
-# Check authentication
+# --- Check authentication ---
 if ! gh auth status >/dev/null 2>&1; then
     echo "Error: Not authenticated with GitHub. Run '$0 --auth' to login."
     exit 1
 fi
 
-echo "Fetching data..."
+CURRENT_USER=$(gh api user --jq '.login' 2>/dev/null || echo "unknown")
 
-# Determine if it's a search URL or a single issue
+# Never switch gh accounts here; the user controls account state.
+access_help() {
+    echo "Currently authenticated as: $CURRENT_USER"
+    echo "If this repo needs a different account, set GH_TOKEN yourself and re-run:"
+    echo '  export GH_TOKEN=$(gh auth token --user <login>)'
+}
+
+echo "Fetching data (as $CURRENT_USER)..."
+
+TEMP_JSON="$(mktemp)"
+trap 'rm -f "$TEMP_JSON"' EXIT
+
+FIELDS="title,body,author,createdAt,comments,reactionGroups,url"
+
+# --- Determine if it's a search URL or a single issue ---
 if [[ "$ISSUE_REF" == *"/issues?"* ]]; then
-    # Search URL
-    # Extract the query part after "q="
+    if ! command -v jq >/dev/null 2>&1; then
+        echo "Error: jq is required for search-URL export."
+        exit 1
+    fi
+
+    # Search URL — extract query part after "q="
     QUERY=$(echo "$ISSUE_REF" | sed -n 's/.*q=\([^&]*\).*/\1/p' | python3 -c "import sys, urllib.parse; print(urllib.parse.unquote(sys.stdin.read().strip()))")
 
     # Extract owner and repo from URL
@@ -62,36 +77,28 @@ if [[ "$ISSUE_REF" == *"/issues?"* ]]; then
     echo "Searching issues in $REPO with query: $QUERY (Limit: $LIMIT)"
 
     # Get issue numbers from search
-    ISSUE_NUMBERS=$(gh issue list -R "$REPO" --search "$QUERY" --limit "$LIMIT" --json number -q '.[].number')
+    if ! ISSUE_NUMBERS=$(gh issue list -R "$REPO" --search "$QUERY" --limit "$LIMIT" --json number -q '.[].number'); then
+        echo "Error: Failed to search issues in $REPO."
+        access_help
+        exit 1
+    fi
 
     if [[ -z "$ISSUE_NUMBERS" ]]; then
         echo "No issues found matching the query."
         exit 0
     fi
 
-    # Fetch full data for each issue and combine into a JSON list
-    echo "[" > "$TEMP_JSON"
-    FIRST=true
+    # Fetch full data for each issue; jq -s slurps the concatenated objects into one array
     for NUM in $ISSUE_NUMBERS; do
-        if [ "$FIRST" = true ]; then
-            FIRST=false
-        else
-            echo "," >> "$TEMP_JSON"
-        fi
-        gh issue view -R "$REPO" "$NUM" --json title,body,author,createdAt,comments,reactionGroups,url >> "$TEMP_JSON"
-    done
-    echo "]" >> "$TEMP_JSON"
+        gh issue view -R "$REPO" "$NUM" --json "$FIELDS"
+    done | jq -s '.' > "$TEMP_JSON"
 else
-    # Single Issue
-    gh issue view "$ISSUE_REF" --json title,body,author,createdAt,comments,reactionGroups,url > "$TEMP_JSON"
-    FETCH_STATUS=$?
-    if [[ $FETCH_STATUS -ne 0 ]]; then
+    # Single issue — the python script accepts a bare object, no array wrapping needed
+    if ! gh issue view "$ISSUE_REF" --json "$FIELDS" > "$TEMP_JSON"; then
         echo "Error: Failed to fetch data for $ISSUE_REF. Make sure the URL is correct and you have access."
-        rm -f "$TEMP_JSON"
+        access_help
         exit 1
     fi
-    # Wrap in array for consistent processing in python script
-    sed -i '' 's/^/[/; s/$/]/' "$TEMP_JSON" || sed -i 's/^/[/; s/$/]/' "$TEMP_JSON"
 fi
 
 echo "Converting to Markdown..."
@@ -100,12 +107,12 @@ if [[ "$INCLUDE_COMMENTS" == "true" ]]; then
     PY_ARGS+=("--comments")
 fi
 
-python3 "$DIR/scripts/export_issue.py" "${PY_ARGS[@]}"
+python3 scripts/export_issue.py "${PY_ARGS[@]}"
 
 TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
 if command -v jq >/dev/null 2>&1; then
-    FIRST_TITLE=$(jq -r '.[0].title' "$TEMP_JSON" | sed 's/[^a-zA-Z0-9]/_/g' | cut -c1-50)
-    COUNT=$(jq '. | length' "$TEMP_JSON")
+    FIRST_TITLE=$(jq -r 'if type == "array" then .[0].title else .title end' "$TEMP_JSON" | sed 's/[^a-zA-Z0-9]/_/g' | cut -c1-50)
+    COUNT=$(jq 'if type == "array" then length else 1 end' "$TEMP_JSON")
     if [ "$COUNT" -gt 1 ]; then
         FILENAME="${TIMESTAMP}_search_result_${COUNT}_issues.md"
     else
@@ -116,6 +123,5 @@ else
 fi
 
 mv "$OUTPUT_DIR/issue_export.md" "$OUTPUT_DIR/$FILENAME"
-rm -f "$TEMP_JSON"
 
 echo "Done! File saved to: $OUTPUT_DIR/$FILENAME"
