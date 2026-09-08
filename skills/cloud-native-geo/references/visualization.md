@@ -22,7 +22,7 @@ The newest part of this stack: rendering cloud-native rasters and vectors direct
 
 **What it does:** a map-first STAC search and visualization tool with stac-geoparquet support — browse/query a STAC catalog and see results on a map rather than working through raw JSON responses.
 
-**Reach for it when:** exploring what's in a STAC catalog, or building a lightweight STAC browsing UI.
+**Reach for it when:** exploring what's in a STAC catalog, or building a lightweight STAC browsing UI. Docs: https://developmentseed.org/stac-map/
 
 ## MapLibre GL JS + PMTiles
 

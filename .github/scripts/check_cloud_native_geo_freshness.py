@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check tracked-sources.yaml for the cloud-native-geo skill against live registries.
+"""Check the cloud-native-geo skill's tracked sources against live registries.
 
 Detection only: this never edits the skill or the manifest. When a tracked package has
 shipped a newer release than `last_recorded_version`, it opens (or updates) a single
@@ -23,7 +23,7 @@ from pathlib import Path
 import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-MANIFEST_PATH = REPO_ROOT / "skills/cloud-native-geo/references/tracked-sources.yaml"
+MANIFEST_PATH = REPO_ROOT / ".github/cloud-native-geo-tracked-sources.yaml"
 ISSUE_TITLE = "cloud-native-geo: dependency freshness check"
 REQUEST_TIMEOUT = 15
 
@@ -96,7 +96,7 @@ def build_issue_body(drifted: list[dict]) -> str:
     lines = [
         f"Weekly check found **{len(drifted)}** package(s) tracked by the `cloud-native-geo` "
         "skill with a newer release than what's recorded in "
-        "`skills/cloud-native-geo/references/tracked-sources.yaml`.",
+        "`.github/cloud-native-geo-tracked-sources.yaml`.",
         "",
         "Review whether the skill's guidance still holds, update the prose if the new "
         "release changes anything user-facing, then update `last_recorded_version` / "

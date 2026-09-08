@@ -1,6 +1,6 @@
 ---
 name: cloud-native-geo
-description: Helps choose and use cloud-native geospatial formats and tools — COG, STAC, Zarr/Icechunk/GeoZarr, GeoParquet, PMTiles, FlatGeobuf — plus the Python/JS stack for reading, writing, serving, and visualizing them (titiler, rio-tiler, obstore, pgstac, eoAPI, deck.gl-raster, lonboard). Use when a user wants to store, publish, tile-serve, query, or visualize satellite imagery, raster/vector geospatial data, or build a geospatial app, and when picking a format or library for that job. This is a fast-moving niche space — the skill points to live docs instead of memorized API details for the newest tools.
+description: Use when storing, publishing, tile-serving, cataloging, querying, or visualizing geospatial data — satellite imagery, rasters, vector features, datacubes, point clouds — or when picking a cloud-native format or library for that job: COG, STAC, Zarr, Icechunk, GeoZarr, GeoParquet, PMTiles, FlatGeobuf, COPC, MosaicJSON, titiler, rio-tiler, obstore, pgstac, eoAPI, stactools, rustac, deck.gl-raster, lonboard.
 ---
 
 # Cloud-native geospatial
@@ -65,7 +65,7 @@ These libraries are young or restructure often enough that memorized snippets ar
 | **rustac** | Rust STAC library w/ Python bindings, young and fast-releasing | https://stac-utils.github.io/rustac-py/ |
 | **GeoZarr spec** | Not yet a finalized OGC standard (targeting Architecture Board review 2026) — conventions can still shift | https://geozarr.org/ |
 
-For everything else tracked by this skill (with the exact package name and registry used to check for updates), see [references/tracked-sources.yaml](references/tracked-sources.yaml) — a scheduled job in this repo checks that list weekly and flags anything that's shipped a new release since it was last reviewed.
+Every package this skill recommends is version-tracked by a weekly job in this repo, which flags anything that's shipped a new release since it was last reviewed. Maintainers: the manifest is `.github/cloud-native-geo-tracked-sources.yaml` (CI bookkeeping — no need to read it to use this skill).
 
 ## Requirements
 

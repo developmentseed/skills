@@ -1,6 +1,6 @@
 # The Python stack: storage, tiling, and STAC backends
 
-Development Seed builds or maintains most of these — they're the default choice here, grouped by what problem they solve. Package names and APIs move fast; check [tracked-sources.yaml](tracked-sources.yaml) / the SKILL.md verify-before-coding table before writing code against the ones flagged there.
+Development Seed builds or maintains most of these — they're the default choice here, grouped by what problem they solve. Package names and APIs move fast; check the SKILL.md verify-before-coding table before writing code against the ones flagged there.
 
 ## Object storage access
 

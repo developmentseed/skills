@@ -1,4 +1,6 @@
-# Canonical docs + last-checked release version for the libraries this skill recommends.
+# Canonical docs + last-checked release version for the libraries the cloud-native-geo
+# skill recommends. This is CI bookkeeping for maintainers, not skill guidance — it
+# lives here rather than in the skill so it isn't loaded as context when the skill runs.
 #
 # `.github/scripts/check_cloud_native_geo_freshness.py` reads this file weekly, compares
 # `last_recorded_version` against the live registry, and opens/updates a GitHub issue when
