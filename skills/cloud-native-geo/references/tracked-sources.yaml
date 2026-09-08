@@ -32,6 +32,13 @@
   last_recorded_version: "9.4.3"
   last_checked: "2026-09-08"
 
+- name: rio-cogeo
+  docs_url: https://cogeotiff.github.io/rio-cogeo/
+  registry: pypi
+  package: rio-cogeo
+  last_recorded_version: "7.0.2"
+  last_checked: "2026-09-08"
+
 - name: morecantile
   docs_url: https://developmentseed.org/morecantile/
   registry: pypi
@@ -58,6 +65,13 @@
   registry: pypi
   package: stac-fastapi.pgstac
   last_recorded_version: "6.3.1"
+  last_checked: "2026-09-08"
+
+- name: stac-fastapi-geoparquet
+  docs_url: https://stac-utils.github.io/stac-fastapi-geoparquet/
+  registry: pypi
+  package: stac-fastapi-geoparquet
+  last_recorded_version: "0.0.6"
   last_checked: "2026-09-08"
 
 - name: tipg

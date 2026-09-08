@@ -48,7 +48,7 @@ Development Seed builds or maintains most of the reference implementations in th
 - **Server/data-side Python** (object storage access, raster tiling, STAC backends, STAC data tooling): [references/python-stack.md](references/python-stack.md)
 - **Client-side / notebook visualization** (GPU-rendered raster/Zarr in the browser, GeoParquet-native map viz, STAC browsing): [references/visualization.md](references/visualization.md)
 
-If the task is a narrow **format conversion** (e.g. GeoTIFF → COG, NetCDF → COG, GeoJSON/Shapefile → GeoParquet) rather than choosing/using a format, check for a dedicated conversion skill in this repo first — those carry GDAL-flag-level detail and validation scripts this skill doesn't duplicate.
+If the task is a narrow **format conversion** (e.g. GeoTIFF → COG, NetCDF → COG, GeoJSON/Shapefile → GeoParquet) rather than choosing/using a format, check whether a dedicated conversion skill is available first — one would carry GDAL-flag-level detail and validation scripts this skill doesn't duplicate. If there isn't one, use the format primers here plus the current tool docs.
 
 ## Verify before writing code
 
@@ -61,6 +61,7 @@ These libraries are young or restructure often enough that memorized snippets ar
 | **deck.gl-raster** | New (2026), `ZarrLayer`/GeoZarr support actively expanding | https://developmentseed.org/deck.gl-raster/ |
 | **icechunk** | New (2024), transactional API for Zarr still evolving | https://icechunk.io/en/latest/ |
 | **virtualizarr** | Kerchunk-derived, API and `.to_icechunk()` semantics still moving | https://virtualizarr.readthedocs.io/ |
+| **stac-fastapi-geoparquet** | Pre-1.0 (0.0.x) — the youngest package this skill recommends; API and config surface are unsettled | https://stac-utils.github.io/stac-fastapi-geoparquet/ |
 | **rustac** | Rust STAC library w/ Python bindings, young and fast-releasing | https://stac-utils.github.io/rustac-py/ |
 | **GeoZarr spec** | Not yet a finalized OGC standard (targeting Architecture Board review 2026) — conventions can still shift | https://geozarr.org/ |
 

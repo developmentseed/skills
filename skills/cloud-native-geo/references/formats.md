@@ -52,7 +52,7 @@ What problem each format solves, when to reach for it, and the gotchas that actu
 
 ## GeoZarr
 
-**Problem it solves:** the "what CRS, what spatial transform, what multiscale pyramid" gap in plain Zarr — modular conventions (each addresses one concern: CRS, transform, or multiscale pyramids) so georeferenced data in Zarr is interoperable across tools, the way COG's spec makes a GeoTIFF unambiguous. Developed by the OGC GeoZarr Standards Working Group; not yet a ratified OGC standard (targeting Architecture Board review in 2026), so check `references/../SKILL.md`'s verify-before-coding table for the current spec state before depending on exact key names.
+**Problem it solves:** the "what CRS, what spatial transform, what multiscale pyramid" gap in plain Zarr — modular conventions (each addresses one concern: CRS, transform, or multiscale pyramids) so georeferenced data in Zarr is interoperable across tools, the way COG's spec makes a GeoTIFF unambiguous. Developed by the OGC GeoZarr Standards Working Group; not yet a ratified OGC standard (targeting Architecture Board review in 2026), so check `../SKILL.md`'s verify-before-coding table for the current spec state before depending on exact key names.
 
 **Reach for it when:** producing or consuming Zarr data that needs to be rendered on a map (as opposed to pure array analytics), e.g. as input to deck.gl-raster's `ZarrLayer`.
 

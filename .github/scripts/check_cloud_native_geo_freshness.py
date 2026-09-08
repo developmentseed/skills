@@ -5,8 +5,9 @@ Detection only: this never edits the skill or the manifest. When a tracked packa
 shipped a newer release than `last_recorded_version`, it opens (or updates) a single
 GitHub issue listing what's changed, for a human to review and fold into the skill.
 
-Run locally with no GITHUB_TOKEN to just print the report (used for local verification).
-Run in CI (GITHUB_TOKEN + GITHUB_REPOSITORY set, `gh` on PATH) to also file the issue.
+Run locally with no GITHUB_REPOSITORY set to just print the report (used for local
+verification). Run in CI (GITHUB_REPOSITORY + GITHUB_TOKEN set, `gh` on PATH) to also
+open, update, or close the tracking issue.
 """
 
 from __future__ import annotations
@@ -42,9 +43,21 @@ def latest_npm(package: str) -> str:
 
 
 def latest_github_tag(repo: str) -> str:
-    tags = fetch_json(f"https://api.github.com/repos/{repo}/tags?per_page=1")
+    """Latest release tag for a repo.
+
+    Prefers /releases/latest, which GitHub actually defines as "the newest release".
+    The /tags endpoint is NOT ordered by date or semver -- e.g. opengeospatial/geoparquet
+    returns v1.1.0 before v1.1.0+p1 -- so tags[0] is only a fallback for repos that tag
+    without cutting releases.
+    """
+    try:
+        return fetch_json(f"https://api.github.com/repos/{repo}/releases/latest")["tag_name"]
+    except (urllib.error.HTTPError, KeyError):
+        pass
+
+    tags = fetch_json(f"https://api.github.com/repos/{repo}/tags?per_page=100")
     if not tags:
-        raise ValueError(f"no tags found for {repo}")
+        raise ValueError(f"no releases or tags found for {repo}")
     return tags[0]["name"]
 
 
@@ -97,26 +110,58 @@ def build_issue_body(drifted: list[dict]) -> str:
     return "\n".join(lines)
 
 
-def file_or_update_issue(body: str) -> None:
-    repo = os.environ.get("GITHUB_REPOSITORY")
-    if not repo:
-        print("\n(No GITHUB_REPOSITORY set — skipping issue creation, report only.)")
-        return
+def find_open_issue(repo: str) -> int | None:
+    """Number of the open tracking issue, or None.
 
-    existing = subprocess.run(
+    Filters titles locally rather than via `--search`: GitHub's search index lags behind
+    writes, so a search-based lookup can miss an issue this job just created and open a
+    duplicate.
+    """
+    result = subprocess.run(
         [
             "gh", "issue", "list",
             "--repo", repo,
             "--state", "open",
-            "--search", f'"{ISSUE_TITLE}" in:title',
-            "--json", "number",
+            "--limit", "100",
+            "--json", "number,title",
         ],
         capture_output=True, text=True, check=True,
     )
-    numbers = [i["number"] for i in json.loads(existing.stdout or "[]")]
+    for issue in json.loads(result.stdout or "[]"):
+        if issue["title"] == ISSUE_TITLE:
+            return issue["number"]
+    return None
 
-    if numbers:
-        number = numbers[0]
+
+def sync_issue(body: str | None) -> None:
+    """Reconcile the tracking issue with the current state.
+
+    `body` is the report when something drifted, or None when everything matches -- in
+    which case an open issue is closed so a stale report doesn't linger after the drift
+    has been folded into the skill.
+    """
+    repo = os.environ.get("GITHUB_REPOSITORY")
+    if not repo:
+        print("\n(No GITHUB_REPOSITORY set — skipping issue sync, report only.)")
+        return
+
+    number = find_open_issue(repo)
+
+    if body is None:
+        if number is None:
+            return
+        subprocess.run(
+            [
+                "gh", "issue", "close", str(number),
+                "--repo", repo,
+                "--comment", "Everything matches the recorded versions again — closing.",
+            ],
+            check=True,
+        )
+        print(f"Closed resolved issue #{number}")
+        return
+
+    if number is not None:
         subprocess.run(
             ["gh", "issue", "edit", str(number), "--repo", repo, "--body", body],
             check=True,
@@ -143,13 +188,14 @@ def main() -> int:
 
     if not drifted:
         print("Everything matches the recorded versions. Nothing to do.")
+        sync_issue(None)
         return 0
 
     print(f"\n{len(drifted)} package(s) have newer releases than recorded:")
     for d in drifted:
         print(f"  - {d['name']}: {d['recorded']} -> {d['latest']}")
 
-    file_or_update_issue(build_issue_body(drifted))
+    sync_issue(build_issue_body(drifted))
     return 0
 
 
