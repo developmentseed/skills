@@ -1,0 +1,5 @@
+{
+  "name": "cloud-native-geo",
+  "description": "Helps choose and use cloud-native geospatial formats and tools — COG, STAC, Zarr/Icechunk/GeoZarr, GeoParquet, PMTiles — and the stack for reading, writing, serving, and visualizing them",
+  "version": "1.0.0"
+}

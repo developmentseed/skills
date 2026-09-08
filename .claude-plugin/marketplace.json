@@ -35,6 +35,13 @@
       "description": "Scaffold CI/CD, linting, and dependency automation for a Python project using GitHub Actions",
       "version": "1.0.1",
       "license": "MIT"
+    },
+    {
+      "name": "cloud-native-geo",
+      "source": "./skills/cloud-native-geo",
+      "description": "Helps choose and use cloud-native geospatial formats and tools — COG, STAC, Zarr/Icechunk/GeoZarr, GeoParquet, PMTiles — and the stack for reading, writing, serving, and visualizing them",
+      "version": "1.0.0",
+      "license": "MIT"
     }
   ]
 }

@@ -1,0 +1,168 @@
+# Canonical docs + last-checked release version for the libraries the cloud-native-geo
+# skill recommends. This is CI bookkeeping for maintainers, not skill guidance — it
+# lives here rather than in the skill so it isn't loaded as context when the skill runs.
+#
+# `.github/scripts/check_cloud_native_geo_freshness.py` reads this file weekly, compares
+# `last_recorded_version` against the live registry, and opens/updates a GitHub issue when
+# something has shipped a newer release — it does not edit this file or the skill content
+# itself. After reviewing a flagged package, update its `last_recorded_version` and
+# `last_checked` by hand as part of the PR that updates the prose.
+#
+# `registry` must be one of: pypi, npm, github-tags. Entries without a clean, checkable
+# release stream (specs, bundle repos versioned by other means) are intentionally left out
+# of this file — they're still referenced in SKILL.md / references/*.md, just not
+# version-diffed automatically.
+
+- name: obstore
+  docs_url: https://developmentseed.org/obstore/latest/
+  registry: pypi
+  package: obstore
+  last_recorded_version: "0.11.1"
+  last_checked: "2026-09-08"
+
+- name: titiler
+  docs_url: https://developmentseed.org/titiler/
+  registry: pypi
+  package: titiler.core
+  last_recorded_version: "2.2.1"
+  last_checked: "2026-09-08"
+
+- name: rio-tiler
+  docs_url: https://cogeotiff.github.io/rio-tiler/
+  registry: pypi
+  package: rio-tiler
+  last_recorded_version: "9.4.3"
+  last_checked: "2026-09-08"
+
+- name: rio-cogeo
+  docs_url: https://cogeotiff.github.io/rio-cogeo/
+  registry: pypi
+  package: rio-cogeo
+  last_recorded_version: "7.0.2"
+  last_checked: "2026-09-08"
+
+- name: morecantile
+  docs_url: https://developmentseed.org/morecantile/
+  registry: pypi
+  package: morecantile
+  last_recorded_version: "7.0.3"
+  last_checked: "2026-09-08"
+
+- name: cogeo-mosaic
+  docs_url: https://developmentseed.org/cogeo-mosaic/
+  registry: pypi
+  package: cogeo-mosaic
+  last_recorded_version: "9.2.0"
+  last_checked: "2026-09-08"
+
+- name: pgstac
+  docs_url: https://stac-utils.github.io/pgstac/
+  registry: pypi
+  package: pypgstac
+  last_recorded_version: "0.9.12"
+  last_checked: "2026-09-08"
+
+- name: stac-fastapi-pgstac
+  docs_url: https://stac-utils.github.io/stac-fastapi-pgstac/
+  registry: pypi
+  package: stac-fastapi.pgstac
+  last_recorded_version: "6.3.1"
+  last_checked: "2026-09-08"
+
+- name: stac-fastapi-geoparquet
+  docs_url: https://stac-utils.github.io/stac-fastapi-geoparquet/
+  registry: pypi
+  package: stac-fastapi-geoparquet
+  last_recorded_version: "0.0.6"
+  last_checked: "2026-09-08"
+
+- name: tipg
+  docs_url: https://developmentseed.org/tipg/
+  registry: pypi
+  package: tipg
+  last_recorded_version: "1.6.1"
+  last_checked: "2026-09-08"
+
+- name: geojson-pydantic
+  docs_url: https://developmentseed.org/geojson-pydantic/
+  registry: pypi
+  package: geojson-pydantic
+  last_recorded_version: "2.1.2"
+  last_checked: "2026-09-08"
+
+- name: stactools
+  docs_url: https://stactools.readthedocs.io/
+  registry: pypi
+  package: stactools
+  last_recorded_version: "0.5.3"
+  last_checked: "2026-09-08"
+
+- name: stac-geoparquet
+  docs_url: https://stac-utils.github.io/stac-geoparquet/
+  registry: pypi
+  package: stac-geoparquet
+  last_recorded_version: "0.8.2"
+  last_checked: "2026-09-08"
+
+- name: rustac
+  docs_url: https://stac-utils.github.io/rustac-py/
+  registry: pypi
+  package: rustac
+  last_recorded_version: "0.9.17"
+  last_checked: "2026-09-08"
+
+- name: icechunk
+  docs_url: https://icechunk.io/en/latest/
+  registry: pypi
+  package: icechunk
+  last_recorded_version: "2.2.0"
+  last_checked: "2026-09-08"
+
+- name: virtualizarr
+  docs_url: https://virtualizarr.readthedocs.io/
+  registry: pypi
+  package: virtualizarr
+  last_recorded_version: "2.7.3"
+  last_checked: "2026-09-08"
+
+- name: lonboard
+  docs_url: https://developmentseed.org/lonboard/
+  registry: pypi
+  package: lonboard
+  last_recorded_version: "0.16.0"
+  last_checked: "2026-09-08"
+
+- name: deck.gl-raster
+  docs_url: https://developmentseed.org/deck.gl-raster/
+  registry: npm
+  package: "@developmentseed/deck.gl-raster"
+  last_recorded_version: "0.7.0"
+  last_checked: "2026-09-08"
+
+- name: pmtiles
+  docs_url: https://docs.protomaps.com/pmtiles/
+  registry: npm
+  package: pmtiles
+  last_recorded_version: "4.5.0"
+  last_checked: "2026-09-08"
+
+- name: maplibre-gl
+  docs_url: https://maplibre.org/maplibre-gl-js/docs/
+  registry: npm
+  package: maplibre-gl
+  last_recorded_version: "6.8.0"
+  last_checked: "2026-09-08"
+
+- name: flatgeobuf
+  docs_url: https://flatgeobuf.org/
+  registry: npm
+  package: flatgeobuf
+  last_recorded_version: "4.4.0"
+  last_checked: "2026-09-08"
+
+- name: geoparquet-spec
+  docs_url: https://geoparquet.org/
+  registry: github-tags
+  package: opengeospatial/geoparquet
+  last_recorded_version: "v2.0.0-rc.1"
+  last_checked: "2026-09-08"

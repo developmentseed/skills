@@ -1,0 +1,79 @@
+---
+name: cloud-native-geo
+description: Use when storing, publishing, tile-serving, cataloging, querying, or visualizing geospatial data — satellite imagery, rasters, vector features, datacubes, point clouds — or when picking a cloud-native format or library for that job: COG, STAC, Zarr, Icechunk, GeoZarr, GeoParquet, PMTiles, FlatGeobuf, COPC, MosaicJSON, titiler, rio-tiler, obstore, pgstac, eoAPI, stactools, rustac, deck.gl-raster, lonboard.
+---
+
+# Cloud-native geospatial
+
+Helps pick the right cloud-native format and tool for a geospatial data job, and use it with today's APIs rather than stale, memorized ones. Covers both **producing** data (converting/writing into a cloud-native format) and **consuming** it (reading, serving, querying, visualizing).
+
+This space moves fast — several of the libraries recommended here are under two years old and change their APIs between releases. Two rules make this skill reliable instead of guessy:
+
+1. **Lead with the questions.** When the request leaves any of the four axes below unknown, the reply opens with the questions that close them — not with a tool name.
+2. **Verify before writing code, for fast-moving libraries.** Don't generate code for obstore, titiler/rio-tiler, deck.gl-raster, icechunk, virtualizarr, or rustac from memory — fetch the current docs first (table below).
+
+## Lead with the questions
+
+Every request has to sit on four axes before a format or library can be named:
+
+- **Data shape** — one raster/scene? A time series or multi-band datacube? Millions of small vector features (points/lines/polygons)? A point cloud?
+- **Access pattern** — written once and served read-only to many clients? Or updated/appended by multiple concurrent writers over time?
+- **Where it runs** — does this need a backend tile/API service, or should it work fully client-side (browser/Jupyter) with no server?
+- **Existing infrastructure** — is there already a STAC catalog, a Postgres database, an object-storage bucket (S3/GCS/Azure) this should plug into?
+
+**If the request leaves any axis unknown, the reply is:** the two or three questions that close those axes, and at most a one-line note on which way each answer would swing the choice. No tool recommendation, no options list, no "here's what I'd do meanwhile."
+
+**If the request already pins down all four** — e.g. "convert this Sentinel-2 GeoTIFF to a COG and serve it with titiler-pgstac from our existing pgSTAC database" — answer it directly; no questions.
+
+Worked example: "I need to visualize this raster on a map" pins down nothing. Data shape (is it one COG, or a stack?), where it runs (browser or backend?), and size are all open, and they change the answer completely — deck.gl-raster renders a COG straight from a bucket URL with no server, titiler needs one. Ask; don't default to spinning up a tile server.
+
+## Decision guide
+
+| Need | Reach for |
+|---|---|
+| Serve a single raster (scene, DEM, orthomosaic) efficiently | **COG** — via titiler/rio-tiler (server) or deck.gl-raster (client-side, no server) |
+| Time series / multi-band datacube (climate, model output, stacked imagery) | **Zarr**, +**Icechunk** for transactional/versioned writes, +**GeoZarr** conventions so it's georeferenced, +**VirtualiZarr/Kerchunk** to wrap existing NetCDF/HDF5/GRIB archives without rewriting them |
+| Millions of points/lines/polygons for analytics | **GeoParquet** + DuckDB (spatial extension) or geopandas |
+| Serve pre-rendered tiles (vector or raster) globally with no tile server | **PMTiles** |
+| Stream or client-side-render one big vector dataset | **FlatGeobuf** |
+| Catalog and discover assets across a collection | **STAC** — dynamic API backed by pgstac/eoAPI for large, frequently-updated catalogs; static STAC + STAC-GeoParquet for smaller or serverless ones |
+| Mosaic many COGs across zoom levels (e.g. a basemap from thousands of scenes) | **MosaicJSON** + cogeo-mosaic + titiler |
+| Point cloud (LiDAR, photogrammetry) | **COPC** |
+| Visualize in-browser or in Jupyter with no backend | **deck.gl-raster** (raster/Zarr/GeoZarr) or **lonboard** (vector, GeoParquet-native, Jupyter) or MapLibre GL JS + the PMTiles plugin (tiles) |
+
+Full primers, gotchas, and "why this instead of that" reasoning per format: [references/formats.md](references/formats.md).
+
+## Reading, writing, serving, and querying: the tool stack
+
+Development Seed builds or maintains most of the reference implementations in this space, so it's the default stack here (alternatives are noted where they matter):
+
+- **Server/data-side Python** (object storage access, raster tiling, STAC backends, STAC data tooling): [references/python-stack.md](references/python-stack.md)
+- **Client-side / notebook visualization** (GPU-rendered raster/Zarr in the browser, GeoParquet-native map viz, STAC browsing): [references/visualization.md](references/visualization.md)
+
+If the task is a narrow **format conversion** (e.g. GeoTIFF → COG, NetCDF → COG, GeoJSON/Shapefile → GeoParquet) rather than choosing/using a format, check whether a dedicated conversion skill is available first — one would carry GDAL-flag-level detail and validation scripts this skill doesn't duplicate. If there isn't one, use the format primers here plus the current tool docs.
+
+## Verify before writing code
+
+These libraries are young or restructure often enough that memorized snippets are a real risk. Before generating code against one of them, `WebFetch` its docs (or the relevant page) to confirm current function names, package layout, and required arguments:
+
+| Library | Why it's risky to guess | Docs |
+|---|---|---|
+| **titiler** | Split into namespace packages (`titiler.core`, `titiler.mosaic`, `titiler.xarray`, ...) — there is no monolithic `titiler` install | https://developmentseed.org/titiler/ |
+| **rio-tiler** | On a 9.x major line with breaking changes between majors; `COGReader` was renamed `Reader` back at 4.0 | https://cogeotiff.github.io/rio-tiler/ |
+| **obstore** | New (2025), Rust-backed, API still settling | https://developmentseed.org/obstore/latest/ |
+| **deck.gl-raster** | New (2026), `ZarrLayer`/GeoZarr support actively expanding | https://developmentseed.org/deck.gl-raster/ |
+| **icechunk** | New (2024), transactional API for Zarr still evolving | https://icechunk.io/en/latest/ |
+| **virtualizarr** | Kerchunk-derived, API and `.to_icechunk()` semantics still moving | https://virtualizarr.readthedocs.io/ |
+| **stac-fastapi-geoparquet** | Pre-1.0 (0.0.x) — the youngest package this skill recommends; API and config surface are unsettled | https://stac-utils.github.io/stac-fastapi-geoparquet/ |
+| **rustac** | Rust STAC library w/ Python bindings, young and fast-releasing | https://stac-utils.github.io/rustac-py/ |
+| **GeoZarr spec** | Not yet a finalized OGC standard (targeting Architecture Board review 2026) — conventions can still shift | https://geozarr.org/ |
+
+Every package this skill recommends is version-tracked by a weekly job in this repo, which flags anything that's shipped a new release since it was last reviewed. Maintainers: the manifest is `.github/cloud-native-geo-tracked-sources.yaml` (CI bookkeeping — no need to read it to use this skill).
+
+**If the docs don't show two named libraries integrating, say so.** A request can name a pairing that doesn't exist. obstore and rio-tiler are the live example: neither one's docs mention the other, and rio-tiler reads `s3://` through GDAL on its own. Report that the pairing isn't documented and give the supported path, rather than inventing a bridge between them and presenting it as the answer.
+
+**Split what you verified from what you inferred.** After fetching docs, say which parts of the code came from them and which are inference — "the `S3Store` constructor and `.get()` are current per the obstore docs; handing the bytes to rio-tiler this way I did not verify." One blended confidence number spanning verified and guessed code is worse than none.
+
+## Requirements
+
+No setup needed to use this skill's guidance. Following its code recommendations requires whatever the chosen library needs (e.g. `pip install`/`uv add` the relevant Python package, or GDAL for some conversions) — call that out per-task rather than assuming a fixed environment.
