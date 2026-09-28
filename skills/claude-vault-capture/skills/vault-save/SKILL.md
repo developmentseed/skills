@@ -33,7 +33,7 @@ Derive the following fields from the document content and the current working di
 
 **title** — use the first H1 heading (`# …`) in the document, or the first H2 if no H1 exists, or ask the user if neither exists. Sanitize: remove `|`, `]]`, `[[`, `#`, and backtick characters; collapse multiple spaces to one; truncate to 120 characters.
 
-**project** — run `git -C <cwd> rev-parse --show-toplevel 2>/dev/null | xargs basename` to get the repo name, falling back to `home` if not in a git repo or the command fails.
+**project** — run `git -C "<cwd>" rev-parse --path-format=absolute --git-common-dir 2>/dev/null` and take the name of that path's parent directory (the main checkout's name, also from a linked worktree), falling back to `home` if not in a git repo or the command fails.
 
 **tags** — generate 2–5 topic tags inferred from the document content. Always include `claude-code` and the project name. Use lowercase, hyphenated slugs (e.g. `api-design`, `auth-flow`).
 
@@ -73,25 +73,25 @@ description: |
 ## Step 3 — Generate the filename
 
 1. Take the sanitized title from Step 2.
-2. NFKD-normalize, lowercase, replace every character outside `[a-z0-9]` with `-`, collapse consecutive hyphens, strip leading/trailing hyphens. Truncate to 60 characters.
+2. NFKD-normalize, lowercase, replace every character outside `[a-z0-9]` with `-`, collapse consecutive hyphens, strip leading/trailing hyphens. Truncate to 60 characters. If nothing is left, use `untitled`.
 3. Assemble: `YYYY-MM-DD-<slug>.md`
 4. Check whether `${user_config.vault_dir}/claude-docs/<filename>` already exists. If it does, append `-2`, `-3`, etc. until the path is free.
 
 ## Step 4 — Write the file
 
-Write the complete file to `${user_config.vault_dir}/claude-docs/<filename>` with this exact structure:
+Write the complete file to `${user_config.vault_dir}/claude-docs/<filename>` with this exact structure. Write `title`, `summary`, `project` and each tag as a double-quoted string, escaping `\` and `"` inside it. Unquoted, a value containing `: ` or starting with `[`, `*` or a quote is invalid YAML, and Obsidian drops the note's properties.
 
 ```
 ---
-title: <sanitized title>
-summary: <one sentence, ≤140 chars, sanitized>
+title: "<sanitized title>"
+summary: "<one sentence, ≤140 chars, sanitized>"
 description: |
   <paragraph 1, indented 2 spaces>
 
   <paragraph 2, indented 2 spaces>
 type: <type>
-project: <project>
-tags: [<tag1>, <tag2>, ...]
+project: "<project>"
+tags: ["<tag1>", "<tag2>", ...]
 source: claude-code-export
 created: <YYYY-MM-DD>
 model: <model-id>

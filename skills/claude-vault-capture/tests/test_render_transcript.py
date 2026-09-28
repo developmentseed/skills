@@ -269,3 +269,28 @@ class TestSecretsSurviveTruncation:
         counts = {}
         render_transcript([_msg("user", "", self._blocks_for("error"))], counts)
         assert counts.get("private_key", 0) >= 1, "counts must not silently vanish"
+
+
+class TestGenericToolInputScrubbedBeforeEscaping:
+    """json.dumps turns newlines into `\\n`, which hides KEY=value lines from
+    env_var's line anchor, so each string is scrubbed first."""
+
+    def test_multiline_mcp_input(self):
+        inp = {"sql": "-- setup\nAPI_TOKEN=abcd1234efgh5678"}
+        blocks = [{"type": "tool_use", "name": "mcp__db__query", "input": inp}]
+        out = render_transcript([_msg("assistant", "", blocks)])
+        assert "abcd1234efgh5678" not in out
+        assert "<redacted:env_var>" in out
+
+    def test_multiedit_of_an_env_file(self):
+        edit = {"old_string": "DEBUG=1\nDB_PASSWORD=hunter2hunter2", "new_string": "x"}
+        inp = {"file_path": ".env", "edits": [edit]}
+        blocks = [{"type": "tool_use", "name": "MultiEdit", "input": inp}]
+        out = render_transcript([_msg("assistant", "", blocks)])
+        assert "hunter2hunter2" not in out
+        assert "<redacted:env_var>" in out
+
+    def test_junk_budget_setting_falls_back_to_the_default(self, monkeypatch):
+        monkeypatch.setenv("CAPTURE_TOOL_CHARS_BUDGET", "30k")
+        blocks = [{"type": "tool_use", "name": "Bash", "input": {"command": "ls"}}]
+        assert "[TOOL] Bash: ls" in render_transcript([_msg("assistant", "", blocks)])

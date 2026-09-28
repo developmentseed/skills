@@ -21,7 +21,6 @@ import json
 import re
 import pathlib
 import fcntl
-import threading
 import datetime
 import unicodedata
 import subprocess
@@ -50,30 +49,24 @@ VAULT_DIR = pathlib.Path(
 )
 LOG_PATH = STATE_DIR / "log.md"
 INDEX_PATH = STATE_DIR / "session-index.tsv"
-HOOKS_LOG = pathlib.Path.home() / ".claude" / "hooks.log"
+
+
+def _env_int(name: str, default: int, minimum: int = 1) -> int:
+    """Read an int setting; junk or out-of-range values fall back to the default."""
+    try:
+        value = int(os.environ.get(name) or default)
+    except ValueError:
+        return default
+    return value if value >= minimum else default
+
 
 MODEL_A = "claude-sonnet-5"
 # Sonnet 5's tokenizer emits ~30% more tokens than 4.6; 2000 truncated artifacts mid-JSON.
 MAX_TOKENS_A = 3000
 # Hard wall on one model call (the whole call runs in the background).
-TIMEOUT_SECONDS: int = int(os.environ.get("CAPTURE_TIMEOUT_SECONDS", "30"))
+TIMEOUT_SECONDS: int = _env_int("CAPTURE_TIMEOUT_SECONDS", 30)
 # Replies are non-deterministic: a null or unusable reply gets this many retries.
 PATH_A_RESAMPLES = 1
-
-LOG_REQUIRED_KEYS = [
-    "schema_version",
-    "timestamp",
-    "date",
-    "session_id",
-    "path_a",
-    "skip_reason_a",
-    "tokens_in_a",
-    "tokens_out_a",
-    "cost_usd_a",
-    "redactions",
-]
-
-_STATE_LOCK = threading.Lock()  # guards both log.md and session-index.tsv
 
 # ── title sanitization ─────────────────────────────────────────────────────────
 
@@ -102,11 +95,8 @@ _TAG_BAD_RE = re.compile(r"[^a-z0-9-]+")
 
 def sanitize_type(fm_type) -> str:
     """Collapse anything off the artifact-type allowlist to 'decision'."""
-    return (
-        fm_type
-        if isinstance(fm_type, str) and fm_type in _ALLOWED_TYPES
-        else "decision"
-    )
+    t = fm_type.strip().lower() if isinstance(fm_type, str) else ""
+    return t if t in _ALLOWED_TYPES else "decision"
 
 
 def sanitize_tag(tag) -> str:
@@ -136,9 +126,11 @@ _ARTIFACT_KEYS = frozenset({"title", "type", "body"})
 
 
 def _is_artifact(obj) -> bool:
-    """True when *obj* has the contract keys, all strings (the write path assumes so)."""
-    return isinstance(obj, dict) and all(
-        isinstance(obj.get(k), str) for k in _ARTIFACT_KEYS
+    """True when *obj* has the contract keys as strings, with a non-empty title and body."""
+    return (
+        isinstance(obj, dict)
+        and all(isinstance(obj.get(k), str) for k in _ARTIFACT_KEYS)
+        and bool(obj["title"].strip() and obj["body"].strip())
     )
 
 
@@ -265,11 +257,16 @@ def uses_excluded_command(
 ) -> bool:
     """Return True if any user turn invokes an excluded slash command.
 
-    Matches only when the command appears at the start of a line (possibly
-    preceded by whitespace), so mentions of the command in prose are ignored.
+    Matches Claude Code's `<command-name>/cmd</command-name>` markup, or the
+    command at the start of a line, so mentions in prose are ignored.
     """
     cmds = EXCLUDED_COMMANDS if excluded_commands is None else excluded_commands
-    patterns = [re.compile(r"(?m)^\s*" + re.escape(c) + r"(?:\s|$)") for c in cmds]
+    patterns = [
+        re.compile(
+            rf"(?m)^\s*{re.escape(c)}(?:\s|$)|<command-name>{re.escape(c)}</command-name>"
+        )
+        for c in cmds
+    ]
     for msg in messages:
         if msg.get("role") != "user":
             continue
@@ -288,27 +285,39 @@ def is_above_token_limit(text: str) -> bool:
     chars/4 undercounts Sonnet 5's tokenizer by ~30%; kept so the cutoff doesn't
     silently start skipping sessions captured today.
     """
-    limit = int(os.environ.get("CAPTURE_MAX_EST_TOKENS", str(CAPTURE_MAX_EST_TOKENS)))
-    return len(text) // 4 > limit
+    return len(text) // 4 > _env_int("CAPTURE_MAX_EST_TOKENS", CAPTURE_MAX_EST_TOKENS)
 
 
 # ── project derivation ─────────────────────────────────────────────────────────
 
 
+_GIT_ROOT_ARGS = ["--path-format=absolute", "--git-common-dir", "--show-toplevel"]
+
+
 def derive_project(cwd: str) -> str:
-    """Return nearest git repo basename, or 'home' if not in a repo."""
+    """Return the git repo's name (the main checkout's, even from a linked worktree).
+
+    Starts from the nearest existing ancestor of *cwd*, since a worktree may be
+    removed before this backgrounded worker runs. 'home' outside any repo.
+    """
+    path = pathlib.Path(cwd)
+    while not path.is_dir() and path != path.parent:
+        path = path.parent
     try:
         result = subprocess.run(
-            ["git", "-C", cwd, "rev-parse", "--show-toplevel"],
+            ["git", "-C", str(path), "rev-parse", *_GIT_ROOT_ARGS],
             capture_output=True,
             text=True,
             timeout=5,
         )
-        if result.returncode == 0:
-            return pathlib.Path(result.stdout.strip()).name
     except Exception:
-        pass
-    return "home"
+        return "home"
+    if result.returncode != 0:
+        return "home"
+    common_dir, toplevel = result.stdout.splitlines()[:2]
+    common = pathlib.Path(common_dir)
+    # <repo>/.git for normal repos and worktrees; submodules keep theirs under .git/modules.
+    return common.parent.name if common.name == ".git" else pathlib.Path(toplevel).name
 
 
 # ── log building ───────────────────────────────────────────────────────────────
@@ -345,19 +354,17 @@ def build_log_entry(
 
 
 def append_log(entry: dict, *, log_path: pathlib.Path | None = None) -> None:
-    """Append one JSON line to log_path with cross-process flock + in-process lock.
+    """Append one JSON line to log_path under an exclusive flock.
 
     Defaults resolve at call time (not as a default arg) so tests can patch LOG_PATH.
     """
     log_path = log_path or LOG_PATH
-    line = json.dumps(entry) + "\n"
-    with _STATE_LOCK:
-        log_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(log_path, "a", encoding="utf-8") as fh:
-            fcntl.flock(fh, fcntl.LOCK_EX)
-            fh.write(line)
-            fh.flush()
-            fcntl.flock(fh, fcntl.LOCK_UN)
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(log_path, "a", encoding="utf-8") as fh:
+        fcntl.flock(fh, fcntl.LOCK_EX)
+        fh.write(json.dumps(entry) + "\n")
+        fh.flush()
+        fcntl.flock(fh, fcntl.LOCK_UN)
 
 
 def _log_skip(
@@ -386,15 +393,14 @@ def _append_index(
     """Append one line to session-index.tsv, creating the file with header if absent."""
     index_path = index_path or INDEX_PATH
     index_path.parent.mkdir(parents=True, exist_ok=True)
-    with _STATE_LOCK:
-        with open(index_path, "a", encoding="utf-8") as fh:
-            fcntl.flock(fh, fcntl.LOCK_EX)
-            if fh.tell() == 0:
-                # schema_version 2: path_b column dropped with Path B retirement.
-                fh.write("# schema_version: 2\n")
-            fh.write(f"{session_id}\t{path_a or 'null'}\t{date_str}\n")
-            fh.flush()
-            fcntl.flock(fh, fcntl.LOCK_UN)
+    with open(index_path, "a", encoding="utf-8") as fh:
+        fcntl.flock(fh, fcntl.LOCK_EX)
+        if fh.tell() == 0:
+            # schema_version 2: path_b column dropped with Path B retirement.
+            fh.write("# schema_version: 2\n")
+        fh.write(f"{session_id}\t{path_a or 'null'}\t{date_str}\n")
+        fh.flush()
+        fcntl.flock(fh, fcntl.LOCK_UN)
 
 
 # ── API call stubs (overridable in tests) ─────────────────────────────────────
@@ -414,6 +420,14 @@ _TRANSCRIPT_TAIL = (
     "Do not write the next turn of it. Reply now with your entire response being "
     "either one JSON object starting with `{` or the single word null.\n"
 )
+
+
+class ReplyError(Exception):
+    """A reply that ended without a usable answer (refusal, truncation); no resample."""
+
+    def __init__(self, reason: str, tokens_in: int | None, tokens_out: int | None):
+        super().__init__(reason)
+        self.reason, self.tokens_in, self.tokens_out = reason, tokens_in, tokens_out
 
 
 def _invoke_model(
@@ -454,7 +468,13 @@ def _invoke_via_api_key(
         # The SDK's timeout type is NOT a subclass of the builtin TimeoutError that
         # run_capture maps to the `timeout` skip reason, so translate it here.
         raise TimeoutError(str(exc)) from exc
-    return msg.content[0].text.strip(), msg.usage.input_tokens, msg.usage.output_tokens
+    tin, tout = msg.usage.input_tokens, msg.usage.output_tokens
+    if msg.stop_reason in ("refusal", "max_tokens"):
+        raise ReplyError(
+            "refusal" if msg.stop_reason == "refusal" else "truncated", tin, tout
+        )
+    text = "".join(b.text for b in msg.content if b.type == "text")
+    return text.strip(), tin, tout
 
 
 # The Claude Code runtime frames requests as agentic coding tasks, so the model
@@ -476,10 +496,13 @@ def _invoke_via_subscription(
 ) -> tuple[str, int | None, int | None]:
     """Drive the model through the Claude Code runtime using subscription auth.
 
-    Auth comes from CLAUDE_CODE_OAUTH_TOKEN (`claude setup-token`). tools=[]
-    removes the built-in toolset (allowed_tools=[] alone only skips permission
-    prompts). max_turns > 1 is headroom: at 1, any wasted turn ends the run with
-    error_max_turns and discards the reply. TIMEOUT_SECONDS bounds the whole run.
+    Auth comes from CLAUDE_CODE_OAUTH_TOKEN (`claude setup-token`). The run is
+    isolated to match API mode: setting_sources=[] loads no user settings (else
+    plugins, including this one's SessionEnd hook, fire on the curation session),
+    tools=[] removes the built-in toolset, thinking is off and output is capped at
+    MAX_TOKENS_A. max_turns > 1 is headroom: at 1, any wasted turn ends the run
+    with error_max_turns and discards the reply. TIMEOUT_SECONDS bounds the run up
+    to the result message; CLI teardown happens after it.
     """
     import asyncio
     from claude_agent_sdk import (
@@ -499,6 +522,9 @@ def _invoke_via_subscription(
             max_turns=4,
             tools=[],
             allowed_tools=[],
+            setting_sources=[],
+            thinking={"type": "disabled"},
+            env={"CLAUDE_CODE_MAX_OUTPUT_TOKENS": str(MAX_TOKENS_A)},
         )
         parts: list[str] = []  # every text block in stream order, for salvage
         reply: list[str] = []  # text of the latest assistant message only
@@ -507,6 +533,9 @@ def _invoke_via_subscription(
         try:
             async for message in query(prompt=prompt, options=options):
                 if isinstance(message, AssistantMessage):
+                    # e.g. auth failure or rate limit: its text is not a reply
+                    if message.error:
+                        raise RuntimeError(f"assistant error: {message.error}")
                     texts = [
                         b.text for b in message.content if isinstance(b, TextBlock)
                     ]
@@ -523,6 +552,9 @@ def _invoke_via_subscription(
                         + (usage.get("cache_read_input_tokens", 0) or 0)
                     )
                     tokens_out = usage.get("output_tokens", 0) or 0
+                    if message.is_error and not reply:
+                        raise RuntimeError(f"{message.subtype}: {message.result}")
+                    break  # the reply is complete; don't wait for CLI teardown
         except Exception as exc:
             # The SDK raises on a CLI error result (e.g. error_max_turns) after
             # the reply may already have streamed; keep it — it was paid for.
@@ -546,7 +578,8 @@ def _call_path_a(scrubbed_text: str, prompts_dir: pathlib.Path) -> dict | None:
     merged in. A model null returns the usage dict plus {"_null": True} so the
     spend still reaches the log (test doubles may return bare None). If no
     attempt yields an artifact and any reply was unusable, raises
-    JSONDecodeError carrying `.usage` — malformed wins over a trailing null.
+    JSONDecodeError — malformed wins over a trailing null. Every exception
+    raised from here carries `.usage` covering all attempts so far.
     """
     if os.environ.get("CAPTURE_MOCK_SDK") == "1":
         raise RuntimeError(
@@ -568,27 +601,40 @@ def _call_path_a(scrubbed_text: str, prompts_dir: pathlib.Path) -> dict | None:
             "cost_usd": _estimate_cost_a(tokens_in, tokens_out),
         }
 
-    malformed: str | None = None
-    for _ in range(PATH_A_RESAMPLES + 1):
-        text, tin, tout = _invoke_model(
-            MODEL_A, MAX_TOKENS_A, system_prompt, scrubbed_text
-        )
+    def _add(tin: int | None, tout: int | None) -> None:
+        nonlocal tokens_in, tokens_out, usage_lost
         if tin is None or tout is None:
             usage_lost = True
         else:
             tokens_in += tin
             tokens_out += tout
+
+    malformed: str | None = None
+    for _ in range(PATH_A_RESAMPLES + 1):
+        try:
+            text, tin, tout = _invoke_model(
+                MODEL_A, MAX_TOKENS_A, system_prompt, scrubbed_text
+            )
+        except Exception as exc:
+            if isinstance(exc, ReplyError):
+                _add(exc.tokens_in, exc.tokens_out)
+            exc.usage = _usage()  # type: ignore[attr-defined]
+            raise
+        _add(tin, tout)
+        text = text.strip()
         raw = _strip_fences(text).strip()
-        if raw.lower() == "null":
+        if raw.lower() == "null" or text.partition("\n")[0].strip().lower() == "null":
             continue
         try:
             data = json.loads(raw)
         except json.JSONDecodeError:
             data = None
         if not _is_artifact(data):
-            # Replies sometimes wrap valid JSON in prose; it was paid for.
-            data = _salvage_artifact(raw)
+            # Replies sometimes wrap valid JSON in prose; it was paid for. Search
+            # the whole reply: _strip_fences keeps only the first fenced block.
+            data = _salvage_artifact(text)
         if data is not None:
+            data.pop("_null", None)  # the model must not be able to fake a null
             data.update(_usage())
             return data
         malformed = raw
@@ -673,19 +719,29 @@ def _tool_result_text(block: dict) -> str:
     return c if isinstance(c, str) else ""
 
 
-def _scrub_cap(text: str, cap: int, counts: dict[str, int] | None) -> str:
-    """Scrub *text*, then truncate to *cap*; accumulate redaction counts into *counts*.
-
-    Never the reverse order: a cap landing mid-secret leaves a fragment no rule
-    matches (private keys need their END line, AKIA/AIza their full length).
-    """
+def _scrub_counted(value, counts: dict[str, int] | None):
+    """Scrub every string in *value* (str, or nested dicts/lists of them), in place of
+    each; accumulate redaction counts into *counts*."""
     import scrub as scrub_mod
 
-    scrubbed, found = scrub_mod.scrub(text)
+    if isinstance(value, dict):
+        return {k: _scrub_counted(v, counts) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_scrub_counted(v, counts) for v in value]
+    if not isinstance(value, str):
+        return value
+    scrubbed, found = scrub_mod.scrub(value)
     if counts is not None:
         for name, n in found.items():
             counts[name] = counts.get(name, 0) + n
-    return scrubbed[:cap]
+    return scrubbed
+
+
+def _scrub_cap(text: str, cap: int, counts: dict[str, int] | None) -> str:
+    """Scrub *text*, then truncate to *cap* — never the reverse: a cap landing
+    mid-secret leaves a fragment no rule matches (private keys need their END
+    line, AKIA/AIza their full length)."""
+    return _scrub_counted(text, counts)[:cap]
 
 
 def _render_tool_use(block: dict, counts: dict[str, int] | None = None) -> str:
@@ -704,8 +760,9 @@ def _render_tool_use(block: dict, counts: dict[str, int] | None = None) -> str:
     if name == "Write":
         body = _scrub_cap(str(inp.get("content", "")), _EDIT_DIFF_CAP, counts)
         return f"[TOOL] Write: {inp.get('file_path', '')} | {body}"
-    # Any other tool: name + a compact slice of its input for context.
-    blob = _scrub_cap(json.dumps(inp, default=str), _OTHER_INPUT_CAP, counts)
+    # Any other tool: name + a compact slice of its input. Scrub each string
+    # before json.dumps: escaped newlines and quotes would hide KEY=value lines.
+    blob = json.dumps(_scrub_counted(inp, counts), default=str)[:_OTHER_INPUT_CAP]
     return f"[TOOL] {name}: {blob}"
 
 
@@ -724,8 +781,8 @@ def render_transcript(
     dropped. Tool strings are scrubbed before capping; pass *redactions* to
     collect those counts.
     """
-    budget = int(os.environ.get("CAPTURE_TOOL_CHARS_BUDGET", "30000"))
-    head = int(os.environ.get("CAPTURE_SUCCESS_HEAD_CHARS", "200"))
+    budget = _env_int("CAPTURE_TOOL_CHARS_BUDGET", 30000, minimum=0)
+    head = _env_int("CAPTURE_SUCCESS_HEAD_CHARS", 200, minimum=0)
     used = 0
     lines: list[str] = []
 
@@ -818,30 +875,27 @@ def run_capture(
     # ── 7. curation API call (or mock) ────────────────────────────────────────
     result_a: dict | None = None
     skip_reason_a: str | None = None
-    tokens_in_a = tokens_out_a = None
-    cost_usd_a = None
 
     try:
         result_a = _call_path_a(scrubbed_text, prompts_dir)
-        if result_a is not None:
-            tokens_in_a = result_a.get("tokens_in")
-            tokens_out_a = result_a.get("tokens_out")
-            cost_usd_a = result_a.get("cost_usd")
+        usage = result_a or {}
         if result_a is None or result_a.get("_null"):
             skip_reason_a = "model_returned_null"
             result_a = None
-    except json.JSONDecodeError as exc:
-        skip_reason_a = "malformed_json"
-        usage = getattr(exc, "usage", None)
-        if usage:
-            tokens_in_a = usage.get("tokens_in")
-            tokens_out_a = usage.get("tokens_out")
-            cost_usd_a = usage.get("cost_usd")
-    except TimeoutError:
-        skip_reason_a = "timeout"
     except Exception as exc:
-        skip_reason_a = f"error:{type(exc).__name__}"
-        _log_error(f"PATH_A {type(exc).__name__}: {exc}")  # log.md keeps only the type
+        usage = getattr(exc, "usage", None) or {}
+        if isinstance(exc, json.JSONDecodeError):
+            skip_reason_a = "malformed_json"
+        elif isinstance(exc, ReplyError):
+            skip_reason_a = exc.reason
+        elif isinstance(exc, TimeoutError):
+            skip_reason_a = "timeout"
+        else:
+            skip_reason_a = f"error:{type(exc).__name__}"
+            _log_error(f"PATH_A {type(exc).__name__}: {exc}")  # log.md keeps the type
+    tokens_in_a = usage.get("tokens_in")
+    tokens_out_a = usage.get("tokens_out")
+    cost_usd_a = usage.get("cost_usd")
 
     # ── 8. scrub model output (title, body, tags, source_links) ──────────────
     if result_a:
@@ -863,26 +917,31 @@ def run_capture(
         fname_a = make_filename(date_str, slug_a, session_id)
         rel_a = f"Inbox/auto/{fname_a}"
         full_path_a = vault_dir / "Inbox" / "auto" / fname_a
-        _write_artifact(
-            full_path_a,
-            title=title_a,
-            fm_type=sanitize_type(result_a.get("type", "decision")),
-            project=project,
-            source="claude-code-curated",
-            session_id=session_id,
-            created=date_str,
-            model=MODEL_A,
-            cost_usd=cost_usd_a,
-            redactions=redactions,
-            tags=["claude-code", "curated"]
-            + [s for s in (sanitize_tag(t) for t in result_a["tags"][:10]) if s],
-            body=result_a.get("body", ""),
-            source_links=result_a.get("source_links", []),
-        )
-        path_a_rel = rel_a
+        try:
+            _write_artifact(
+                full_path_a,
+                title=title_a,
+                fm_type=sanitize_type(result_a.get("type", "decision")),
+                project=project,
+                source="claude-code-curated",
+                session_id=session_id,
+                created=date_str,
+                model=MODEL_A,
+                cost_usd=cost_usd_a,
+                redactions=redactions,
+                tags=["claude-code", "curated"]
+                + [s for s in (sanitize_tag(t) for t in result_a["tags"][:10]) if s],
+                body=result_a.get("body", ""),
+                source_links=result_a.get("source_links", []),
+            )
+            path_a_rel = rel_a
+        except OSError as exc:  # e.g. vault unmounted: still log the paid call
+            skip_reason_a = f"error:{type(exc).__name__}"
+            _log_error(f"WRITE {full_path_a}: {exc}")
 
-    # ── 11. append session index ─────────────────────────────────────────────
-    _append_index(session_id, path_a_rel, date_str, index_path=index_path)
+    # ── 11. append session index (not after timeouts/errors, so a resume retries) ─
+    if not (skip_reason_a == "timeout" or (skip_reason_a or "").startswith("error:")):
+        _append_index(session_id, path_a_rel, date_str, index_path=index_path)
 
     # ── 12. append log ───────────────────────────────────────────────────────
     entry = build_log_entry(
@@ -962,20 +1021,24 @@ def main():
         _log_error("ANTHROPIC_API_KEY not set — skipping capture")
         sys.exit(0)
 
+    def _log_best_effort(reason: str) -> None:  # never let logging fail the hook
+        try:
+            _log_skip(session_id, reason, {})
+        except Exception as log_exc:
+            _log_error(f"Failed to log {reason}: {log_exc}")
+
     try:
         transcript = _load_transcript(transcript_path)
     except Exception as exc:
         _log_error(f"Failed to load transcript {transcript_path!r}: {exc}")
-        try:  # still record it in log.md, but never let logging fail the hook
-            _log_skip(session_id, "transcript_missing", {})
-        except Exception as log_exc:
-            _log_error(f"Failed to log transcript_missing: {log_exc}")
+        _log_best_effort("transcript_missing")
         sys.exit(0)
 
     try:
         run_capture(transcript=transcript, session_id=session_id, cwd=cwd)
     except Exception as exc:
         _log_error(f"CURATE_ERROR session={session_id}: {exc}")
+        _log_best_effort(f"error:{type(exc).__name__}")
         sys.exit(0)
 
 

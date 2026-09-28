@@ -3,6 +3,7 @@ builtin TimeoutError, so _invoke_via_api_key must normalize it to the `timeout` 
 """
 
 import importlib
+from types import SimpleNamespace
 
 import anthropic
 import httpx
@@ -122,3 +123,44 @@ class TestSonnet5RequestShape:
 
     def test_cost_estimate_uses_sonnet5_list_price(self):
         assert curate._estimate_cost_a(1_000_000, 1_000_000) == 12.0  # $2 in + $10 out
+
+
+def _api_reply(monkeypatch, stop_reason, content):
+    class _Messages:
+        def create(self, **kwargs):
+            usage = SimpleNamespace(input_tokens=100, output_tokens=7)
+            return SimpleNamespace(
+                stop_reason=stop_reason, content=content, usage=usage
+            )
+
+    class _Client:
+        def __init__(self, *a, **kw):
+            self.messages = _Messages()
+
+    monkeypatch.setattr(anthropic, "Anthropic", _Client)
+
+
+@pytest.mark.parametrize(
+    "stop_reason, reason", [("refusal", "refusal"), ("max_tokens", "truncated")]
+)
+def test_unusable_stop_reason_raises_reply_error(monkeypatch, stop_reason, reason):
+    _api_reply(monkeypatch, stop_reason, [])
+    with pytest.raises(curate.ReplyError) as exc:
+        curate._invoke_via_api_key("m", 10, "sys", "text")
+    assert exc.value.reason == reason
+    assert exc.value.tokens_in == 100
+
+
+def test_reply_text_is_joined_from_text_blocks(monkeypatch):
+    _api_reply(monkeypatch, "end_turn", [SimpleNamespace(type="text", text=" null ")])
+    assert curate._invoke_via_api_key("m", 10, "sys", "text") == ("null", 100, 7)
+
+
+def test_junk_timeout_setting_falls_back_to_default(monkeypatch):
+    monkeypatch.setenv("CAPTURE_TIMEOUT_SECONDS", "2 minutes")
+    try:
+        importlib.reload(curate)
+        assert curate.TIMEOUT_SECONDS == 30
+    finally:
+        monkeypatch.delenv("CAPTURE_TIMEOUT_SECONDS", raising=False)
+        importlib.reload(curate)

@@ -74,7 +74,7 @@ class TestTokenPrefixes:
     def test_github_pat(self):
         from scrub import scrub
 
-        out, counts = scrub("ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefgh")
+        out, counts = scrub("ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghij")
         assert "ghp_" not in out
         assert counts["token_prefix"] >= 1
 
@@ -463,3 +463,57 @@ class TestMalformedRule:
             scrub_rules.RULES[:] = original_rules
             importlib.reload(scrub_mod)
             os.environ.pop("SCRUB_FAILURES_PATH", None)
+
+
+class TestConnectionStrings:
+    @pytest.mark.parametrize(
+        "text, secret",
+        [
+            ("DATABASE_URL=postgres://app:S3cretPw9x@db:5432/app", "S3cretPw9x"),
+            ("redis://:hunter2pw@cache:6379/0", "hunter2pw"),
+            ("mongodb+srv://u:p4ssw0rd@cluster.example.net/db", "p4ssw0rd"),
+            ('create_engine("postgresql+psycopg2://a:b1c2d3@h/db")', "b1c2d3"),
+        ],
+    )
+    def test_password_is_redacted_for_any_scheme(self, text, secret):
+        from scrub import scrub
+
+        out, counts = scrub(text)
+        assert secret not in out
+        assert counts["basic_auth_url"] == 1
+
+
+class TestVendorKeysAndAwsJson:
+    @pytest.mark.parametrize(
+        "text, secret",
+        [
+            ('api_key="sk-or-v1-' + "a1" * 32 + '"', "a1a1a1a1"),
+            ("LANGFUSE_SK=sk-lf-1234abcd-5678-90ab-cdef-1234567890ab", "1234abcd"),
+            (
+                '"SecretAccessKey": "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLE",',
+                "wJalrXUtn",
+            ),
+            ('"SessionToken": "FwoGZXIvYXdzEBYaDExample"', "FwoGZXIvYXdz"),
+        ],
+    )
+    def test_secret_is_redacted(self, text, secret):
+        from scrub import scrub
+
+        assert secret not in scrub(text)[0]
+
+
+class TestProseIsLeftAlone:
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "if MAX_TOKENS == 3000:",
+            "the highs_and_lows of the week",
+            "the API expects a Bearer token in the header",
+        ],
+    )
+    def test_unchanged(self, text):
+        from scrub import scrub
+
+        out, counts = scrub(text)
+        assert out == text
+        assert sum(counts.values()) == 0

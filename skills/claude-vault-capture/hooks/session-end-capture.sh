@@ -54,6 +54,7 @@ _export_int_setting() {
     local name="$1" value
     value="${!name:-}"
     if [[ -z "$value" ]]; then
+        unset "$name"  # an exported-but-empty value (e.g. from capture.env) too
         return 0
     fi
     if [[ "$value" =~ ^[1-9][0-9]*$ ]]; then
@@ -81,13 +82,10 @@ if [[ -n "${CLAUDE_PLUGIN_DATA:-}" ]]; then
     mkdir -p "$CLAUDE_PLUGIN_DATA/state"
 fi
 
-# Read hook JSON from stdin
-HOOK_JSON=$(cat)
-
-# Extract fields
-TRANSCRIPT_PATH=$(echo "$HOOK_JSON" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('transcript_path',''))" 2>/dev/null || true)
-SESSION_ID=$(echo "$HOOK_JSON" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('session_id',''))" 2>/dev/null || true)
-CWD=$(echo "$HOOK_JSON" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('cwd',''))" 2>/dev/null || true)
+# Parse the hook JSON from stdin in one python3 call; fields are joined with \x1f
+# (a non-whitespace IFS char, so an empty field doesn't shift the others).
+FIELDS=$(python3 -c "import json,sys; d=json.load(sys.stdin); print('\x1f'.join(str(d.get(k) or '') for k in ('transcript_path','session_id','cwd')))" 2>/dev/null || true)
+IFS=$'\x1f' read -r TRANSCRIPT_PATH SESSION_ID CWD <<<"$FIELDS" || true
 
 # Guard: if we couldn't parse the fields (or python3 is missing), log why and bail.
 if [[ -z "$SESSION_ID" || -z "$TRANSCRIPT_PATH" ]]; then
@@ -105,6 +103,14 @@ fi
 if [[ -z "${CAPTURE_VAULT_DIR:-}" ]]; then
     printf 'CAPTURE_NOT_CONFIGURED\t%s\tCAPTURE_VAULT_DIR unset — set vault_dir in plugin config\n' \
         "$NOW" >> "$HOOKS_LOG"
+    exit 0
+fi
+# Config values arrive unexpanded; a relative path would resolve inside the
+# session's project directory, so expand ~ and refuse anything else relative.
+CAPTURE_VAULT_DIR="${CAPTURE_VAULT_DIR/#\~/$HOME}"
+if [[ "$CAPTURE_VAULT_DIR" != /* ]]; then
+    printf 'CAPTURE_VAULT_NOT_ABSOLUTE\t%s\tvault_dir %s is not an absolute path\n' \
+        "$NOW" "$CAPTURE_VAULT_DIR" >> "$HOOKS_LOG"
     exit 0
 fi
 

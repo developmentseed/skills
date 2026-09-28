@@ -44,7 +44,7 @@
     "excluded_commands": {
       "type": "string",
       "title": "Excluded slash commands",
-      "description": "Comma-separated slash commands whose sessions are never captured, e.g. /daily-devlog,/weekly-recap. Matched at the start of a line, so mentions in prose don't count. Leave blank to capture every qualifying session."
+      "description": "Comma-separated slash commands whose sessions are never captured, e.g. /daily-devlog,/weekly-recap. Matched when typed as a command (or at the start of a line), so mentions in prose don't count. Leave blank to capture every qualifying session."
     }
   }
 }

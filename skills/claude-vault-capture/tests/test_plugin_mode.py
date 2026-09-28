@@ -311,3 +311,61 @@ class TestTokenFilePermissions:
         assert proc.returncode == 0, proc.stderr
         assert wait_for(invocation)
         assert "ANTHROPIC_API_KEY=DUMMY-API-KEY" in invocation.read_text()
+
+
+class TestVaultPath:
+    def test_tilde_is_expanded(self, tmp_path):
+        home = tmp_path / "home"
+        home.mkdir()
+        invocation = _build_plugin(home)
+
+        proc = _run_hook(home, extra_env={"CLAUDE_PLUGIN_OPTION_VAULT_DIR": "~/vault"})
+
+        assert proc.returncode == 0, proc.stderr
+        assert wait_for(invocation)
+        assert f"CAPTURE_VAULT_DIR={home / 'vault'}\n" in invocation.read_text()
+
+    def test_relative_path_is_refused(self, tmp_path):
+        home = tmp_path / "home"
+        home.mkdir()
+        invocation = _build_plugin(home)
+
+        proc = _run_hook(home, extra_env={"CLAUDE_PLUGIN_OPTION_VAULT_DIR": "Obsidian"})
+
+        assert proc.returncode == 0, proc.stderr
+        assert (
+            "CAPTURE_VAULT_NOT_ABSOLUTE" in (home / ".claude" / "hooks.log").read_text()
+        )
+        assert not wait_for(invocation, timeout=0.5)
+
+
+class TestPayload:
+    def test_null_transcript_path_is_unparsed_not_the_string_none(self, tmp_path):
+        home = tmp_path / "home"
+        home.mkdir()
+        invocation = _build_plugin(home)
+
+        payload = {"session_id": "s1", "transcript_path": None, "cwd": "/tmp"}
+        proc = _run_hook(home, payload=payload)
+
+        assert proc.returncode == 0, proc.stderr
+        assert (
+            "CAPTURE_HOOK_JSON_UNPARSED" in (home / ".claude" / "hooks.log").read_text()
+        )
+        assert not wait_for(invocation, timeout=0.5)
+
+    def test_cwd_with_spaces_survives(self, tmp_path):
+        home = tmp_path / "home"
+        home.mkdir()
+        invocation = _build_plugin(home)
+
+        payload = {
+            "session_id": "s1",
+            "transcript_path": "/tmp/t.jsonl",
+            "cwd": "/tmp/my project",
+        }
+        proc = _run_hook(home, payload=payload)
+
+        assert proc.returncode == 0, proc.stderr
+        assert wait_for(invocation)
+        assert invocation.read_text().splitlines()[0].endswith("s1 /tmp/my project")

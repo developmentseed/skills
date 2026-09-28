@@ -133,3 +133,62 @@ def test_non_object_then_artifact_recovers(monkeypatch):
 
     assert calls["n"] == 2
     assert result["title"] == "T"
+
+
+def test_salvage_searches_the_whole_reply_not_just_the_first_fence(monkeypatch):
+    artifact = json.dumps({"title": "T", "type": "runbook", "body": "B"})
+    text = "The fix was:\n```\npip install foo==1.2\n```\n" + artifact
+    fake, _ = _seq((text, 10, 1))
+    monkeypatch.setattr(curate, "_invoke_model", fake)
+    assert curate._call_path_a("scrubbed", PROMPTS)["title"] == "T"
+
+
+def test_null_first_line_wins_over_a_trailing_example(monkeypatch):
+    example = '```json\n{"title": "T", "type": "gotcha", "body": "B"}\n```'
+    fake, _ = _seq(("null\n\n" + example, 10, 1), ("null", 10, 1))
+    monkeypatch.setattr(curate, "_invoke_model", fake)
+    assert curate._call_path_a("scrubbed", PROMPTS)["_null"] is True
+
+
+def test_empty_title_or_body_is_not_an_artifact(monkeypatch):
+    empty = json.dumps({"title": "", "type": "", "body": ""})
+    fake, _ = _seq((empty, 10, 1), (empty, 10, 1))
+    monkeypatch.setattr(curate, "_invoke_model", fake)
+    with pytest.raises(json.JSONDecodeError):
+        curate._call_path_a("scrubbed", PROMPTS)
+
+
+def test_model_supplied_null_key_cannot_discard_an_artifact(monkeypatch):
+    artifact = json.dumps({"title": "T", "type": "gotcha", "body": "B", "_null": True})
+    fake, _ = _seq((artifact, 10, 1))
+    monkeypatch.setattr(curate, "_invoke_model", fake)
+    assert not curate._call_path_a("scrubbed", PROMPTS).get("_null")
+
+
+def test_null_then_timeout_keeps_the_first_attempts_usage(monkeypatch):
+    calls = {"n": 0}
+
+    def _fake(model, max_tokens, system_prompt, user_text):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return ("null", 100, 3)
+        raise TimeoutError("slow")
+
+    monkeypatch.setattr(curate, "_invoke_model", _fake)
+    with pytest.raises(TimeoutError) as exc:
+        curate._call_path_a("scrubbed", PROMPTS)
+    assert exc.value.usage["tokens_in"] == 100
+
+
+def test_refusal_is_not_resampled_and_keeps_usage(monkeypatch):
+    calls = {"n": 0}
+
+    def _fake(model, max_tokens, system_prompt, user_text):
+        calls["n"] += 1
+        raise curate.ReplyError("refusal", 100, 0)
+
+    monkeypatch.setattr(curate, "_invoke_model", _fake)
+    with pytest.raises(curate.ReplyError) as exc:
+        curate._call_path_a("scrubbed", PROMPTS)
+    assert calls["n"] == 1
+    assert exc.value.usage["tokens_in"] == 100

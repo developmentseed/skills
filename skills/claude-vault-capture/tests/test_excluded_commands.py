@@ -76,3 +76,13 @@ class TestUsesExcludedCommand:
     def test_public_default_is_empty_so_nothing_is_excluded(self):
         assert EXCLUDED_COMMANDS == []
         assert uses_excluded_command(_msgs("/my-journal")) is False
+
+
+def test_matches_claude_code_command_markup():
+    typed = (
+        "<command-message>my-journal</command-message>\n"
+        "<command-name>/my-journal</command-name>\n"
+        "<command-args>2026-09-28</command-args>"
+    )
+    assert uses_excluded_command(_msgs(typed), excluded_commands=CMDS) is True
+    assert uses_excluded_command(_msgs(typed), excluded_commands=["/my"]) is False

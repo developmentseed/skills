@@ -62,13 +62,14 @@ Check the `skip_reason_a` from the log above:
 |---|---|
 | `threshold` | fewer than 3 user turns, or under 1500 chars of your own content — working as intended |
 | `model_returned_null` | the model judged the session had no durable artifact — the single most common reason, and normal |
-| `duplicate` | that session was already captured |
+| `duplicate` | that session already reached the model (captured, null, malformed, refused or truncated). Timeouts and errors aren't recorded, so a resumed session retries |
 | `excluded_command` | a slash command in `excluded_commands` was used |
 | `token_limit` | transcript above `max_est_tokens` |
 | `timeout` | the model call exceeded `timeout_seconds` — raise it |
 | `malformed_json` | the model didn't return a usable artifact; transient unless it's every session |
+| `refusal` / `truncated` | the model declined, or hit its output cap mid-artifact; not retried |
 | `transcript_missing` | the transcript file couldn't be read |
-| `error:<Type>` | anything else; the message is in `hooks.log` |
+| `error:<Type>` | anything else, including a failed note write (e.g. vault unmounted); the message is in `hooks.log` |
 
 **If `log.md` doesn't exist or has no row for the session at all**, the worker never got that far. `grep -E 'CAPTURE_|skipping capture' ~/.claude/hooks.log | tail` names the cause:
 
@@ -77,6 +78,8 @@ Check the `skip_reason_a` from the log above:
 | `skipping capture` (no key / no token) | set `anthropic_api_key`, or `use_subscription=1` + `oauth_token` |
 | `CAPTURE_TOKEN_FILE_PERMS` | `chmod 600` the credential file it names |
 | `CAPTURE_NOT_CONFIGURED` | set `vault_dir` |
+| `CAPTURE_VAULT_NOT_ABSOLUTE` | make `vault_dir` an absolute path (`~/…` is expanded) |
+| `CAPTURE_BAD_SETTING` | a numeric setting isn't a positive whole number; the default is used |
 | `CAPTURE_NO_INTERPRETER` / `CAPTURE_NO_PYTHON3` | install `uv` / `python3` (see Prerequisites) |
 | `CAPTURE_HOOK_JSON_UNPARSED` | report it — the hook payload didn't parse |
 
@@ -86,7 +89,7 @@ Set via the plugin config prompt (`/plugin` → configure), or override with env
 
 | Setting / Env var | Default | Effect |
 |---|---|---|
-| `vault_dir` / `CAPTURE_VAULT_DIR` | — | **Required.** Your Obsidian vault path. |
+| `vault_dir` / `CAPTURE_VAULT_DIR` | — | **Required.** Absolute path to your Obsidian vault (`~/…` is expanded). |
 | `anthropic_api_key` / `ANTHROPIC_API_KEY` | — | API key for metered (default) mode; falls back to `~/.claude_vault_token`. |
 | `use_subscription` / `CAPTURE_USE_SUBSCRIPTION` | — | `1` routes model calls through your Claude Pro/Max subscription. |
 | `oauth_token` / `CLAUDE_CODE_OAUTH_TOKEN` | — | Subscription auth; falls back to `~/.claude_vault_oauth_token`. |
@@ -127,11 +130,13 @@ This is a capture *engine*. Triaging captured artifacts into structured vault fo
 
 To stop the pipeline from archiving an extension's own workflow sessions, set `CAPTURE_EXCLUDED_COMMANDS`.
 
+Notes contain model-written text. If you use Templater's "trigger on new file creation", exclude `Inbox/auto/` there, or any `<% %>` in a note runs as a template.
+
 ## Turning it off
 
-Disable or uninstall from `/plugin` — the `SessionEnd` hook goes with it, and capture stops immediately. To pause instead, set `excluded_commands` to a command you always use, or remove the credential.
+To pause, disable the plugin in `/plugin`: the `SessionEnd` hook stops and your settings and state are kept.
 
-Nothing is cleaned up on uninstall, by design: notes already in `<vault>/Inbox/auto/` and `<vault>/claude-docs/` are ordinary markdown files that stay yours. The dedup index and log under `${CLAUDE_PLUGIN_DATA}` are left in place too, so re-installing resumes where you left off rather than re-capturing old sessions.
+Uninstalling leaves your notes in `<vault>/Inbox/auto/` and `<vault>/claude-docs/` alone. But by default, uninstalling from the last place the plugin is installed **deletes `${CLAUDE_PLUGIN_DATA}`**: the dedup index and the log. A later reinstall would then re-curate (and re-bill) resumed sessions. Pass `--keep-data` to `claude plugin uninstall` to keep them.
 
 ## Tests
 

@@ -132,3 +132,43 @@ class TestTokenCaptureOnFailure:
         assert entry["skip_reason_a"] == "malformed_json"
         assert entry["tokens_in_a"] is None
         assert entry["cost_usd_a"] is None
+
+
+class TestOutcomesAfterThePaidCall:
+    def test_refusal_logs_its_own_reason_with_usage(self, tmp_path, monkeypatch):
+        import curate
+
+        def mock_a(*a, **kw):
+            exc = curate.ReplyError("refusal", 100, 0)
+            exc.usage = {"tokens_in": 100, "tokens_out": 0, "cost_usd": 0.0002}
+            raise exc
+
+        entry, _ = _run_with_mock_a(tmp_path, monkeypatch, mock_a, sid="t-refusal")
+        assert entry["skip_reason_a"] == "refusal"
+        assert entry["tokens_in_a"] == 100
+
+    def test_timeout_is_not_indexed_so_a_resume_retries(self, tmp_path, monkeypatch):
+        def mock_a(*a, **kw):
+            raise TimeoutError("slow")
+
+        entry, _ = _run_with_mock_a(tmp_path, monkeypatch, mock_a, sid="t-timeout")
+        assert entry["skip_reason_a"] == "timeout"
+        index = tmp_path / "session-index.tsv"
+        assert not index.exists() or "t-timeout" not in index.read_text()
+
+    def test_vault_write_failure_still_logs_the_paid_call(self, tmp_path, monkeypatch):
+        import curate
+
+        def read_only(*a, **kw):
+            raise PermissionError("read-only vault")
+
+        monkeypatch.setattr(curate, "_write_artifact", read_only)
+        artifact = {"title": "T", "type": "gotcha", "body": "B", "tags": []}
+        usage = {"tokens_in": 100, "tokens_out": 5, "cost_usd": 0.00025}
+
+        entry, _ = _run_with_mock_a(
+            tmp_path, monkeypatch, lambda *a, **kw: {**artifact, **usage}, sid="t-ro"
+        )
+        assert entry["skip_reason_a"] == "error:PermissionError"
+        assert entry["path_a"] is None
+        assert entry["tokens_in_a"] == 100

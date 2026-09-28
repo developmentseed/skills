@@ -19,11 +19,15 @@ class _TextBlock:
 @dataclass
 class _AssistantMessage:
     content: list = field(default_factory=list)
+    error: str | None = None
 
 
 @dataclass
 class _ResultMessage:
     usage: dict | None = None
+    is_error: bool = False
+    subtype: str = "success"
+    result: str | None = None
 
 
 class _CapturedOptions:
@@ -132,3 +136,49 @@ def test_error_before_any_reply_still_raises(monkeypatch):
     )
     with pytest.raises(Exception, match="error result"):
         curate._invoke_via_subscription("claude-sonnet-5", "system", "transcript")
+
+
+def test_run_is_isolated_like_api_mode(monkeypatch):
+    """No user settings (else this plugin's own SessionEnd hook fires on the
+    curation session), no thinking, and output capped like API mode."""
+    _install_fake_sdk(monkeypatch, [_AssistantMessage(content=[_TextBlock("null")])])
+    curate._invoke_via_subscription("claude-sonnet-5", "system", "transcript")
+    kw = _CapturedOptions.last_kwargs
+    assert kw["setting_sources"] == []
+    assert kw["thinking"] == {"type": "disabled"}
+    assert kw["env"]["CLAUDE_CODE_MAX_OUTPUT_TOKENS"] == str(curate.MAX_TOKENS_A)
+
+
+def test_assistant_error_is_raised_not_parsed_as_a_reply(monkeypatch):
+    login = _TextBlock("Invalid API key · Please run /login")
+    _install_fake_sdk(
+        monkeypatch,
+        [_AssistantMessage(content=[login], error="authentication_failed")],
+    )
+    with pytest.raises(RuntimeError, match="authentication_failed"):
+        curate._invoke_via_subscription("claude-sonnet-5", "system", "transcript")
+
+
+def test_error_result_without_a_reply_raises(monkeypatch):
+    failed = _ResultMessage(
+        usage={}, is_error=True, subtype="error_during_execution", result="boom"
+    )
+    _install_fake_sdk(monkeypatch, [failed])
+    with pytest.raises(RuntimeError, match="error_during_execution"):
+        curate._invoke_via_subscription("claude-sonnet-5", "system", "transcript")
+
+
+def test_returns_at_the_result_without_waiting_for_teardown(monkeypatch):
+    _install_fake_sdk(
+        monkeypatch,
+        [
+            _AssistantMessage(content=[_TextBlock("null")]),
+            _ResultMessage(usage={"input_tokens": 5, "output_tokens": 2}),
+            _AssistantMessage(content=[_TextBlock("late junk")]),
+        ],
+        error=Exception("teardown failure"),
+    )
+    text, tokens_in, tokens_out = curate._invoke_via_subscription(
+        "claude-sonnet-5", "system", "transcript"
+    )
+    assert (text, tokens_in, tokens_out) == ("null", 5, 2)

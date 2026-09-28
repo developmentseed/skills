@@ -178,3 +178,27 @@ class TestTranscriptMissingIsLogged:
         assert entries[-1]["skip_reason_a"] == "transcript_missing"
         assert entries[-1]["session_id"] == "sid-missing"
         assert entries[-1]["path_a"] is None
+
+    def test_unexpected_error_after_loading_is_logged(self, tmp_path, monkeypatch):
+        import curate
+        import pytest
+
+        transcript = tmp_path / "t.jsonl"
+        transcript.write_text('{"type": "user", "message": {"content": "hi"}}\n')
+        entries = []
+        monkeypatch.setattr(
+            curate, "append_log", lambda entry, **kw: entries.append(entry)
+        )
+        monkeypatch.setenv("CAPTURE_MOCK_SDK", "1")
+
+        def boom(**kw):
+            raise ValueError("bad setting")
+
+        monkeypatch.setattr(curate, "run_capture", boom)
+        monkeypatch.setattr(
+            sys, "argv", ["curate.py", str(transcript), "sid-boom", "/tmp"]
+        )
+
+        with pytest.raises(SystemExit):
+            curate.main()
+        assert entries[-1]["skip_reason_a"] == "error:ValueError"

@@ -3,7 +3,20 @@
 import json
 
 
-from curate import build_log_entry, LOG_REQUIRED_KEYS
+from curate import build_log_entry
+
+LOG_REQUIRED_KEYS = [
+    "schema_version",
+    "timestamp",
+    "date",
+    "session_id",
+    "path_a",
+    "skip_reason_a",
+    "tokens_in_a",
+    "tokens_out_a",
+    "cost_usd_a",
+    "redactions",
+]
 
 
 def _valid(entry: dict) -> bool:

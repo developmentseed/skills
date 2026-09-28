@@ -28,6 +28,34 @@ class TestProjectDerivation:
         subprocess.run(["git", "init", str(repo)], capture_output=True)
         assert derive_project(str(repo / "subdir")) == "my-project"
 
+    def test_linked_worktree_reports_the_main_repo(self, tmp_path):
+        repo = tmp_path / "my-project"
+        repo.mkdir()
+        git = [
+            "git",
+            "-C",
+            str(repo),
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@t",
+            "-c",
+            "commit.gpgsign=false",
+        ]
+        subprocess.run(["git", "init", "-q", str(repo)], check=True)
+        subprocess.run(
+            [*git, "commit", "-q", "--allow-empty", "-m", "init"], check=True
+        )
+        wt = tmp_path / "pr5-fixes"
+        subprocess.run([*git, "worktree", "add", "-q", str(wt)], check=True)
+        assert derive_project(str(wt)) == "my-project"
+
+    def test_removed_cwd_falls_back_to_an_existing_ancestor(self, tmp_path):
+        repo = tmp_path / "my-project"
+        repo.mkdir()
+        subprocess.run(["git", "init", "-q", str(repo)], check=True)
+        assert derive_project(str(repo / "gone" / "deeper")) == "my-project"
+
     def test_outside_git_repo_returns_home(self, tmp_path):
         no_git = tmp_path / "no-git-dir"
         no_git.mkdir()
