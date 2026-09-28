@@ -1,30 +1,23 @@
 {
   "name": "claude-vault-capture",
-  "description": "Automatically turns Claude Code sessions into curated Obsidian notes. On SessionEnd a backgrounded worker scrubs secrets, sends the transcript to a model, and writes a decision/runbook/gotcha/spec to your vault's Inbox/auto/. Makes a paid model call per qualifying session (~$0.12 median, or bill it to a Claude Pro/Max plan). Includes the /vault-save skill for on-demand exports.",
+  "description": "Automatically turns Claude Code sessions into curated Obsidian notes. On SessionEnd a backgrounded worker scrubs secrets, sends the transcript to a model, and writes a decision/runbook/gotcha/spec to your vault's Inbox/auto/. Makes a paid model call per qualifying session (~$0.13 median, or bill it to a Claude Pro/Max plan). Includes the /vault-save skill for on-demand exports.",
   "version": "0.3.0",
-  "author": {
-    "name": "Lo\u00efc Houpert"
-  },
+  "author": { "name": "Loïc Houpert" },
   "homepage": "https://github.com/developmentseed/claude-vault-capture",
   "repository": "https://github.com/developmentseed/skills",
   "license": "MIT",
-  "keywords": [
-    "claude-code",
-    "obsidian",
-    "hooks",
-    "knowledge-capture"
-  ],
+  "keywords": ["claude-code", "obsidian", "hooks", "knowledge-capture"],
   "userConfig": {
     "vault_dir": {
       "type": "directory",
       "title": "Obsidian vault path",
-      "description": "Absolute path to the ROOT of your Obsidian vault (the folder containing .obsidian/), not a subfolder. Captures are written to <vault>/Inbox/auto/ and /vault-save exports to <vault>/claude-docs/; both are created if missing \u2014 so a mistyped path fails silently by making new folders somewhere else.",
+      "description": "Absolute path to the ROOT of your Obsidian vault (the folder containing .obsidian/), not a subfolder. Captures are written to <vault>/Inbox/auto/ and /vault-save exports to <vault>/claude-docs/; both are created if missing — so a mistyped path fails silently by making new folders somewhere else.",
       "required": true
     },
     "anthropic_api_key": {
       "type": "string",
       "title": "Anthropic API key",
-      "description": "API key for metered (default) mode. REQUIRED unless you set 'Bill to Claude subscription' below \u2014 with neither, every capture aborts before the model call and writes no note and no log entry. Note that Claude Code strips the environment it runs hooks in, so an ANTHROPIC_API_KEY exported in your shell profile usually does NOT reach the worker; set it here (stored in your OS keychain) or in ~/.claude_vault_token (which must be chmod 600, or the hook refuses it).",
+      "description": "API key for metered (default) mode. REQUIRED unless you set 'Bill to Claude subscription' below — with neither, every capture aborts before the model call and writes no note and no log entry. Note that Claude Code strips the environment it runs hooks in, so an ANTHROPIC_API_KEY exported in your shell profile usually does NOT reach the worker; set it here (stored in your OS keychain) or in ~/.claude_vault_token (which must be chmod 600, or the hook refuses it).",
       "sensitive": true
     },
     "use_subscription": {
@@ -35,18 +28,18 @@
     "oauth_token": {
       "type": "string",
       "title": "Claude OAuth token (subscription mode)",
-      "description": "Long-lived token from `claude setup-token` (starts with sk-ant-oat01-\u2026). Required when 'Bill to Claude subscription' is 1. Stored in your OS keychain. Alternative: ~/.claude_vault_oauth_token, which must be chmod 600 or the hook refuses it.",
+      "description": "Long-lived token from `claude setup-token` (starts with sk-ant-oat01-…). Required when 'Bill to Claude subscription' is 1. Stored in your OS keychain. Alternative: ~/.claude_vault_oauth_token, which must be chmod 600 or the hook refuses it.",
       "sensitive": true
     },
     "timeout_seconds": {
       "type": "string",
       "title": "Model call timeout (seconds)",
-      "description": "Hard wall in seconds on a single model call; leave blank for 30. Raise it (120 is a reasonable ceiling) if large sessions log skip_reason 'timeout' \u2014 all model work is backgrounded, so a higher value never delays session close. Whole number."
+      "description": "Hard wall in seconds on a single model call; leave blank for 30. Raise it (120 is a reasonable ceiling) if large sessions log skip_reason 'timeout' — all model work is backgrounded, so a higher value never delays session close. Positive whole number."
     },
     "max_est_tokens": {
       "type": "string",
       "title": "Token ceiling before skipping",
-      "description": "Sessions estimated above this many tokens are skipped un-captured; leave blank for 50000 (~200 KB of transcript). Raise it if long sessions log skip_reason 'token_limit'. Whole number."
+      "description": "Sessions estimated above this many tokens are skipped un-captured; leave blank for 50000 (~200 KB of transcript). Raise it if long sessions log skip_reason 'token_limit'. Positive whole number."
     },
     "excluded_commands": {
       "type": "string",

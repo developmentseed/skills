@@ -8,7 +8,7 @@ A [Claude Code plugin marketplace](https://docs.anthropic.com/en/docs/claude-cod
 - **[setup-python-repo](skills/setup-python-repo/)**: scaffolds CI/CD, linting, release automation, and dependency automation for uv-based Python repositories using GitHub Actions
 - **[veda-story-creator](skills/veda-story-creator/)**: generates [VEDA](https://www.earthdata.nasa.gov/dashboard) scrollytelling MDX stories with satellite data visualizations. Includes a dataset catalog, annotated examples, and lessons learned
 - **[claude-vault-capture](skills/claude-vault-capture/)** *(code-bearing plugin — Claude Code `/plugin install` only)*: a SessionEnd hook + `/vault-save` skill that automatically captures Claude Code sessions into an Obsidian vault — scrubs secrets, summarizes, and writes curated notes. Adapted from [developmentseed/claude-vault-capture](https://github.com/developmentseed/claude-vault-capture) (MIT © Loïc Houpert).
-  **Unlike the on-demand skills above, this one runs by itself**: it sends each qualifying session transcript to a model and makes a paid call (~$0.12 median per capture, or bill it to a Claude Pro/Max plan). Read its [README](skills/claude-vault-capture/README.md) before installing.
+  **Unlike the on-demand skills above, this one runs by itself**: it sends each qualifying session transcript to a model and makes a paid call (~$0.13 median per capture, or bill it to a Claude Pro/Max plan). Read its [README](skills/claude-vault-capture/README.md) before installing.
 
 Know of a useful Skill that lives in another repo? See **[EXTERNAL-SKILLS.md](EXTERNAL-SKILLS.md)**.
 
