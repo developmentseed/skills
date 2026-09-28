@@ -164,28 +164,13 @@ def _salvage_artifact(raw: str) -> dict | None:
 
 
 def make_slug(title: str) -> str:
-    """Derive a deterministic URL-safe slug from *title* (max 60 chars)."""
-    # NFKD-normalize and strip non-ASCII
+    """Derive a deterministic URL-safe slug from *title* (max 60, cut at a dash)."""
     s = unicodedata.normalize("NFKD", sanitize_title(title))
-    s = s.encode("ascii", "ignore").decode("ascii")
-    s = s.lower()
-    # Replace runs of non-alnum with dash
-    s = _NON_ALNUM_RE.sub("-", s)
-    # Strip leading/trailing dashes
+    s = _NON_ALNUM_RE.sub("-", s.encode("ascii", "ignore").decode("ascii").lower())
     s = s.strip("-")
-
-    if not s:
-        return "untitled"
-
-    # Truncate to 60 at a dash boundary where possible
     if len(s) > 60:
-        truncated = s[:60]
-        # Walk back to last dash
-        last_dash = truncated.rfind("-")
-        if last_dash > 0:
-            truncated = truncated[:last_dash]
-        s = truncated.strip("-")
-
+        cut = s[:60]
+        s = (cut[: cut.rfind("-")] if cut.rfind("-") > 0 else cut).strip("-")
     return s or "untitled"
 
 

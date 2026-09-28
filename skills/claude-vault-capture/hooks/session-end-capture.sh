@@ -19,7 +19,7 @@ _read_secret_file() {
     perms="$(stat -L -c '%a' "$f" 2>/dev/null || stat -L -f '%Lp' "$f" 2>/dev/null)" || return 1
     if [[ "$perms" != *00 ]]; then
         printf 'CAPTURE_TOKEN_FILE_PERMS\t%s\t%s is mode %s (group/other-readable) — refusing to use it; run: chmod 600 %s\n' \
-            "${NOW:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}" "$f" "$perms" "$f" >> "$HOOKS_LOG"
+            "$NOW" "$f" "$perms" "$f" >> "$HOOKS_LOG"
         return 1
     fi
     cat "$f"
@@ -74,9 +74,7 @@ _export_int_setting CAPTURE_MAX_EST_TOKENS
 : "${CAPTURE_EXCLUDED_COMMANDS:=${CLAUDE_PLUGIN_OPTION_EXCLUDED_COMMANDS:-}}"
 export CAPTURE_EXCLUDED_COMMANDS
 
-# Runtime state (dedup index, per-session log, scrub-failure log): prefer the
-# plugin's persistent data dir, which survives plugin updates. Standalone use
-# falls back to the in-repo eval/state default baked into curate.py / scrub.py.
+# Runtime state goes in the plugin data dir (survives updates); standalone uses eval/state.
 if [[ -n "${CLAUDE_PLUGIN_DATA:-}" ]]; then
     export CAPTURE_STATE_DIR="$CLAUDE_PLUGIN_DATA/state"
     export SCRUB_FAILURES_PATH="$CLAUDE_PLUGIN_DATA/state/scrub-failures.md"
@@ -103,9 +101,7 @@ if [[ -z "$SESSION_ID" || -z "$TRANSCRIPT_PATH" ]]; then
     exit 0
 fi
 
-# Guard: refuse to run unconfigured. Without a vault we have no destination, so
-# log a marker and exit cleanly. (Plugin users set this via /plugin config; the
-# vault_dir userConfig field is marked required, so this path is rare.)
+# Guard: no vault, no destination — log and exit.
 if [[ -z "${CAPTURE_VAULT_DIR:-}" ]]; then
     printf 'CAPTURE_NOT_CONFIGURED\t%s\tCAPTURE_VAULT_DIR unset — set vault_dir in plugin config\n' \
         "$NOW" >> "$HOOKS_LOG"
@@ -116,9 +112,7 @@ fi
 # often absent even when the desktop app has them. Resolve from plugin config,
 # then fall back to token files.
 if [[ "${CAPTURE_USE_SUBSCRIPTION:-}" == "1" ]]; then
-    # Subscription mode: the Claude Agent SDK authenticates with this OAuth token
-    # (generate it once with `claude setup-token`; stored in the OS keychain when
-    # supplied via the sensitive oauth_token plugin config field).
+    # OAuth token from `claude setup-token`.
     : "${CLAUDE_CODE_OAUTH_TOKEN:=${CLAUDE_PLUGIN_OPTION_OAUTH_TOKEN:-}}"
     if [[ -z "${CLAUDE_CODE_OAUTH_TOKEN:-}" && -f "$HOME/.claude_vault_oauth_token" ]]; then
         # shellcheck disable=SC2155  # masking the exit code is deliberate: a failed

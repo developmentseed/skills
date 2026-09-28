@@ -9,6 +9,7 @@ import shutil
 import subprocess
 import time
 
+from conftest import wait_for
 
 HOOK = pathlib.Path(__file__).parent.parent / "hooks" / "session-end-capture.sh"
 
@@ -65,16 +66,6 @@ def _run_hook(home: pathlib.Path, stdin: str, extra_env: dict | None = None):
     return proc, time.monotonic() - start
 
 
-def _wait_for(path: pathlib.Path, timeout: float = 3.0) -> bool:
-    """Poll for the backgrounded shim to write its invocation record."""
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        if path.exists():
-            return True
-        time.sleep(0.02)
-    return False
-
-
 class TestHappyPath:
     def test_marker_and_backgrounded_args(self, tmp_path):
         home = tmp_path / "home"
@@ -98,7 +89,7 @@ class TestHappyPath:
         hooks_log = (home / ".claude" / "hooks.log").read_text()
         assert f"SESSION_END_RECEIVED\t{sid}\t" in hooks_log
 
-        assert _wait_for(invocation), "shim never recorded its invocation"
+        assert wait_for(invocation), "shim never recorded its invocation"
         record = invocation.read_text()
         assert "/tmp/transcript.jsonl" in record
         assert sid in record
@@ -119,7 +110,7 @@ class TestGuards:
         if hooks_log.exists():
             assert "SESSION_END_RECEIVED" not in hooks_log.read_text()
         # nothing backgrounded
-        assert not _wait_for(invocation, timeout=0.5)
+        assert not wait_for(invocation, timeout=0.5)
 
     def test_missing_transcript_path_no_marker(self, tmp_path):
         home = tmp_path / "home"
@@ -130,7 +121,7 @@ class TestGuards:
         proc, _ = _run_hook(home, payload)
 
         assert proc.returncode == 0
-        assert not _wait_for(invocation, timeout=0.5)
+        assert not wait_for(invocation, timeout=0.5)
 
     def test_unconfigured_vault_no_background(self, tmp_path):
         """No capture.env / CAPTURE_VAULT_DIR → log a marker, never background curate."""
@@ -144,9 +135,7 @@ class TestGuards:
         proc, _ = _run_hook(home, payload)
 
         assert proc.returncode == 0
-        assert not _wait_for(invocation, timeout=0.5), (
-            "curate must not run unconfigured"
-        )
+        assert not wait_for(invocation, timeout=0.5), "curate must not run unconfigured"
         hooks_log = (home / ".claude" / "hooks.log").read_text()
         assert "CAPTURE_NOT_CONFIGURED" in hooks_log
 
@@ -166,7 +155,7 @@ class TestCredentialFallback:
         proc, _ = _run_hook(home, payload, extra_env={"CAPTURE_USE_SUBSCRIPTION": "1"})
 
         assert proc.returncode == 0
-        assert _wait_for(invocation)
+        assert wait_for(invocation)
         record = invocation.read_text()
         assert "CLAUDE_CODE_OAUTH_TOKEN=DUMMY-OAUTH-TOKEN" in record
 
@@ -184,7 +173,7 @@ class TestCredentialFallback:
         proc, _ = _run_hook(home, payload)
 
         assert proc.returncode == 0
-        assert _wait_for(invocation)
+        assert wait_for(invocation)
         record = invocation.read_text()
         assert "ANTHROPIC_API_KEY=DUMMY-API-KEY" in record
 
@@ -215,7 +204,7 @@ class TestDeployGuard:
         ]
         assert deploy_lines, "no CAPTURE_DEPLOY line written"
         assert "unknown" in deploy_lines[0]
-        assert _wait_for(invocation), "guard must not block the capture itself"
+        assert wait_for(invocation), "guard must not block the capture itself"
 
     def _git(self, repo, *args):
         return subprocess.run(

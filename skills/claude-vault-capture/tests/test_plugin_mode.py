@@ -7,9 +7,9 @@ import os
 import pathlib
 import shutil
 import subprocess
-import time
 
 import pytest
+from conftest import wait_for
 
 
 HOOK = pathlib.Path(__file__).parent.parent / "hooks" / "session-end-capture.sh"
@@ -96,15 +96,6 @@ def _run_hook(
     return proc
 
 
-def _wait_for(path: pathlib.Path, timeout: float = 3.0) -> bool:
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        if path.exists():
-            return True
-        time.sleep(0.02)
-    return False
-
-
 class TestUvRunBranch:
     def test_no_venv_launches_uv_run_under_system_bash(self, tmp_path):
         """Empty-array expansion must not abort this branch on bash 3.2."""
@@ -116,7 +107,7 @@ class TestUvRunBranch:
 
         assert proc.returncode == 0, proc.stderr
         assert "unbound variable" not in proc.stderr
-        assert _wait_for(invocation), "stub uv never ran — worker was not launched"
+        assert wait_for(invocation), "stub uv never ran — worker was not launched"
         argv = invocation.read_text().splitlines()[0]
         assert argv.startswith("ARGV:run --quiet")
         assert (
@@ -132,7 +123,7 @@ class TestUvRunBranch:
         proc = _run_hook(home, extra_env={"CLAUDE_PLUGIN_OPTION_USE_SUBSCRIPTION": "1"})
 
         assert proc.returncode == 0, proc.stderr
-        assert _wait_for(invocation)
+        assert wait_for(invocation)
         argv = invocation.read_text().splitlines()[0]
         assert "--with claude-agent-sdk==0.2.89" in argv
 
@@ -146,7 +137,7 @@ class TestPluginConfigMapping:
         proc = _run_hook(home)
 
         assert proc.returncode == 0, proc.stderr
-        assert _wait_for(invocation)
+        assert wait_for(invocation)
         record = invocation.read_text()
         assert f"CAPTURE_VAULT_DIR={home / 'vault'}" in record
 
@@ -160,7 +151,7 @@ class TestPluginConfigMapping:
         assert proc.returncode == 0, proc.stderr
         state = home / "plugin-data" / "state"
         assert state.is_dir(), "hook must create ${CLAUDE_PLUGIN_DATA}/state"
-        assert _wait_for(invocation)
+        assert wait_for(invocation)
         record = invocation.read_text()
         assert f"CAPTURE_STATE_DIR={state}" in record
         assert f"SCRUB_FAILURES_PATH={state / 'scrub-failures.md'}" in record
@@ -173,7 +164,7 @@ class TestPluginConfigMapping:
         proc = _run_hook(home, extra_env={"CAPTURE_VAULT_DIR": str(home / "other")})
 
         assert proc.returncode == 0, proc.stderr
-        assert _wait_for(invocation)
+        assert wait_for(invocation)
         assert f"CAPTURE_VAULT_DIR={home / 'other'}" in invocation.read_text()
 
 
@@ -190,7 +181,7 @@ class TestTimeoutOption:
         )
 
         assert proc.returncode == 0, proc.stderr
-        assert _wait_for(invocation)
+        assert wait_for(invocation)
         assert "CAPTURE_TIMEOUT_SECONDS=SET[120]" in invocation.read_text()
 
     def test_unset_option_leaves_env_unset_not_empty(self, tmp_path):
@@ -201,7 +192,7 @@ class TestTimeoutOption:
         proc = _run_hook(home)
 
         assert proc.returncode == 0, proc.stderr
-        assert _wait_for(invocation)
+        assert wait_for(invocation)
         assert "CAPTURE_TIMEOUT_SECONDS=UNSET" in invocation.read_text()
 
     @pytest.mark.parametrize("value", ["2 minutes", "0"])
@@ -215,7 +206,7 @@ class TestTimeoutOption:
         )
 
         assert proc.returncode == 0, proc.stderr
-        assert _wait_for(invocation), "junk config must not stop the capture"
+        assert wait_for(invocation), "junk config must not stop the capture"
         assert "CAPTURE_TIMEOUT_SECONDS=UNSET" in invocation.read_text()
         assert "CAPTURE_BAD_SETTING" in (home / ".claude" / "hooks.log").read_text()
 
@@ -236,7 +227,7 @@ class TestMigratedSettings:
         )
 
         assert proc.returncode == 0, proc.stderr
-        assert _wait_for(invocation)
+        assert wait_for(invocation)
         assert (
             "CAPTURE_EXCLUDED_COMMANDS=/daily-devlog,/weekly-recap"
             in invocation.read_text()
@@ -252,7 +243,7 @@ class TestMigratedSettings:
         )
 
         assert proc.returncode == 0, proc.stderr
-        assert _wait_for(invocation)
+        assert wait_for(invocation)
         assert "CAPTURE_MAX_EST_TOKENS=SET[120000]" in invocation.read_text()
 
     def test_non_numeric_max_est_tokens_is_rejected(self, tmp_path):
@@ -265,7 +256,7 @@ class TestMigratedSettings:
         )
 
         assert proc.returncode == 0, proc.stderr
-        assert _wait_for(invocation), "junk config must not stop the capture"
+        assert wait_for(invocation), "junk config must not stop the capture"
         assert "CAPTURE_MAX_EST_TOKENS=UNSET" in invocation.read_text()
         assert "CAPTURE_BAD_SETTING" in (home / ".claude" / "hooks.log").read_text()
 
@@ -302,7 +293,7 @@ class TestTokenFilePermissions:
         proc = _run_hook(home)
 
         assert proc.returncode == 0, proc.stderr
-        assert _wait_for(invocation)
+        assert wait_for(invocation)
         assert "ANTHROPIC_API_KEY=\n" in invocation.read_text()
         hooks_log = (home / ".claude" / "hooks.log").read_text()
         assert "CAPTURE_TOKEN_FILE_PERMS" in hooks_log
@@ -318,5 +309,5 @@ class TestTokenFilePermissions:
         proc = _run_hook(home)
 
         assert proc.returncode == 0, proc.stderr
-        assert _wait_for(invocation)
+        assert wait_for(invocation)
         assert "ANTHROPIC_API_KEY=DUMMY-API-KEY" in invocation.read_text()

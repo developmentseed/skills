@@ -2,6 +2,7 @@ import os
 import sys
 import pathlib
 import tempfile
+import time
 
 # Ensure hooks/ is always on the path for all test modules
 sys.path.insert(0, str(pathlib.Path(__file__).parent.parent / "hooks"))
@@ -45,6 +46,16 @@ def read_log(path) -> list[dict]:
     if not path.exists():
         return []
     return [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+
+
+def wait_for(path, timeout: float = 3.0) -> bool:
+    """Poll until *path* exists (the hook backgrounds its worker)."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if path.exists():
+            return True
+        time.sleep(0.02)
+    return False
 
 
 @pytest.fixture(autouse=True)
