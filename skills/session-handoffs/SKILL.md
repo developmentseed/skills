@@ -23,6 +23,7 @@ At the end of a day with several Claude Code sessions open, before you close the
 
 - `--dry-run`: show the table and the request, send nothing, write nothing.
 - `--only NAME ...`: ask exactly these sessions, whatever the check says.
+- `--from-transcript NAME ...`: don't ask these sessions; write their handoff from their transcript instead (step 5). Meant for sessions that stay busy.
 - `--date YYYY-MM-DD`: defaults to today. After midnight, pass the previous day, or every session looks like it has no handoff.
 
 ## How it works
@@ -54,7 +55,7 @@ Show the table. If the script fails (it reads Claude Code internals, which can c
 
 ### 3. Ask, without interrupting
 
-Sessions to ask: `stale`, `none` and `unknown`, or exactly the `--only` names.
+Sessions to ask: `stale`, `none` and `unknown`, or exactly the `--only` names, minus any `--from-transcript` names.
 
 1. In one parallel block, send each of them a pure subscription: `SendMessage` with `notify_when_idle: true` and no `message`. It costs the peer nothing, and an idle peer's notice comes back at once. If the result says no subscription was made (older version, session gone, messages refused), send the request right away only if its `ListAgents` row said idle; otherwise record `not asked (<reason>)`.
 2. Send the request, again with `notify_when_idle: true`, only when a notice says the peer is idle. A notice that it exited, is unavailable, or that the subscription expired means record it and send nothing. Never send the request to a busy session: it would read it between tool calls, in the middle of its task.
@@ -81,23 +82,34 @@ A peer is done when its reply arrives, or when its second idle notice arrives wi
 
 If a send result or a `[Cross-session delivery notice]` says a message was held or refused, record `held`.
 
-### 5. Write the list
+### 5. A session stays busy: write a snapshot from its transcript (on request)
+
+Only when the user asks ("write devds-00's handoff from its transcript") or passes `--from-transcript`, never on your own: the session may be about to write a better note itself.
+
+1. Run `python3 "${CLAUDE_SKILL_DIR}/scripts/handoff_status.py" --digest '<name>'`. It prints the session's latest note, the directory to write in, and a compact log since that note (or since midnight): the user's prompts, Claude's messages, and one line per tool call, without tool output.
+2. Read the latest note if there is one. Then write `handoff_<date>_<topic>_from-transcript.md` in the printed directory, opening with:
+   `> Snapshot written by /session-handoffs from <name>'s transcript at <HH:MM>, while it was busy. <name> has not reviewed it. Its own last note: <path, or none>.`
+   Follow the same checklist as the request in step 3, and say what was still in progress at that time. Write only what the log shows. Never copy secrets, tokens or credentials; link PRs and issues.
+3. Don't edit that session's own note or memory: it is still working and may write to them.
+4. Don't send that session the request any more. Record `snapshot`, and list the note like a reply, with ` (snapshot)` after its title.
+
+### 6. Write the list
 
 Only this session writes the daily note: several sessions writing at once would clash.
 
 - Find the `session-handoffs daily note:` line in the user's CLAUDE.md or memory and fill in `{date}`. If there is none, print the list instead.
 - Insert under that heading, before the next heading: `high` items at the top of the list, `normal` items after the items already there. Skip a path already in the note.
-- Add the `fresh` and `closed` notes right after step 2, then each reply as it arrives. A `stale` session that ends without a `HANDOFF` reply (no reply, held, not asked, still busy when the user stops) still gets its existing notes listed. One line per note, path with `~` for the home directory:
+- Add the `fresh` and `closed` notes right after step 2, then each reply as it arrives. A `stale` session that ends without a `HANDOFF` reply or a snapshot (no reply, held, not asked, still busy when the user stops) still gets its existing notes listed. One line per note, path with `~` for the home directory:
   - reply: `` - [ ] **<title>:** <first action> `<path>` ``, with ` (important)` after the title of `high` items
   - no reply: `` - [ ] **<title>** `<path>` ``
 - Keep titles to a few words. For notes nobody replied about, take the script's `title` column (the note's first heading, else its file name) and drop a leading "Handoff"/"Handoff —"/"Handoff:" label, dates, and "(written …)" or "START HERE" parts: "Handoff — S2 drain + storage budget, Monday 28 Sep (written Fri 25 Sep ~10:30Z)" becomes "S2 drain + storage budget".
 - Change nothing else in the note.
 
-### 6. Report
+### 7. Report
 
-One table: session → `fresh` / `updated` / `written` / `NONE` / `no reply` / `held` / `busy, not asked`, with the note path, followed by the `closed-none` sessions.
+One table: session → `fresh` / `updated` / `written` / `NONE` / `no reply` / `held` / `snapshot` / `busy, not asked`, with the note path, followed by the `closed-none` sessions.
 
-Keep this session open until every peer is done: closing it drops the pending subscriptions. Sessions still busy when the user stops are `busy, not asked`; ask them later with `--only <name>`.
+Keep this session open until every peer is done: closing it drops the pending subscriptions. Sessions still busy when the user stops are `busy, not asked`: offer to write their handoff from the transcript (step 5), or ask them later with `--only <name>`.
 
 ## Limits
 
