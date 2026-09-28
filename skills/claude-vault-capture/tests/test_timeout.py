@@ -170,3 +170,18 @@ def test_junk_timeout_setting_falls_back_to_default(monkeypatch):
     finally:
         monkeypatch.delenv("CAPTURE_TIMEOUT_SECONDS", raising=False)
         importlib.reload(curate)
+
+
+def test_api_client_keeps_the_sdk_retries(monkeypatch):
+    """Retries rescue a transient 529 that would otherwise lose the capture."""
+    seen = {}
+
+    class _Client:
+        def __init__(self, **kwargs):
+            seen.update(kwargs)
+            raise RuntimeError("stop after construction")
+
+    monkeypatch.setattr(anthropic, "Anthropic", _Client)
+    with pytest.raises(RuntimeError):
+        curate._invoke_via_api_key("m", 10, "sys", "text")
+    assert seen["max_retries"] == 2

@@ -60,7 +60,7 @@ Check the `skip_reason_a` from the log above:
 
 | `skip_reason_a` | Meaning |
 |---|---|
-| `threshold` | fewer than 3 user turns, or under 1500 chars of your own content — working as intended |
+| `threshold` | a very short session: fewer than 3 user-side messages (tool results count) or under 1500 chars of user-side text (your prompts plus injected skill text) — working as intended |
 | `model_returned_null` | the model judged the session had no durable artifact — the single most common reason, and normal |
 | `duplicate` | that session already reached the model (captured, null, malformed, refused or truncated). Timeouts and errors aren't recorded, so a resumed session retries |
 | `excluded_command` | a slash command in `excluded_commands` was used |
@@ -95,7 +95,7 @@ Set via the plugin config prompt (`/plugin` → configure), or override with env
 | `oauth_token` / `CLAUDE_CODE_OAUTH_TOKEN` | — | Subscription auth; falls back to `~/.claude_vault_oauth_token`. |
 | `max_est_tokens` / `CAPTURE_MAX_EST_TOKENS` | `50000` | Token ceiling before skipping (~200 KB transcript). |
 | `excluded_commands` / `CAPTURE_EXCLUDED_COMMANDS` | — | Comma-separated slash commands whose sessions are not captured. |
-| `timeout_seconds` / `CAPTURE_TIMEOUT_SECONDS` | `30` | Hard wall on a single model call. Raise it for large sessions or slow links (subscription mode especially) — all model work is backgrounded, so a higher value never delays session close. |
+| `timeout_seconds` / `CAPTURE_TIMEOUT_SECONDS` | `30` | Hard wall on a single model call (in API mode, per attempt; overloads and 5xx errors are retried twice). Raise it for large sessions or slow links (subscription mode especially) — all model work is backgrounded, so a higher value never delays session close. |
 | `CAPTURE_STATE_DIR` | `${CLAUDE_PLUGIN_DATA}/state` | Where the dedup index and per-session log live. Set automatically for plugin installs. |
 | `CAPTURE_TOOL_CHARS_BUDGET` | `30000` | Character budget for the tool activity (commands, files touched) summarized alongside the conversation. |
 | `CAPTURE_SUCCESS_HEAD_CHARS` | `200` | How much of each successful tool result is kept when rendering that activity. |

@@ -1,13 +1,9 @@
 #!/usr/bin/env bash
 # SessionEnd hook entry point — returns in <200ms; all model work is backgrounded.
-#
-# Runs in two modes from the same file:
-#   • Marketplace plugin — config arrives as CLAUDE_PLUGIN_OPTION_* env vars,
-#     runtime state lives under ${CLAUDE_PLUGIN_DATA}, and the worker is launched
-#     with `uv run` (PEP 723 deps in curate.py; no `uv sync` step required).
-#   • Standalone/dev checkout — config from a sourced capture.env and a `.venv`
-#     built by `uv sync`. Preferred automatically when that .venv exists.
+# Config arrives as CLAUDE_PLUGIN_OPTION_* env vars, state lives under
+# ${CLAUDE_PLUGIN_DATA}, and the worker runs via `uv run` (PEP 723 deps in curate.py).
 set -euo pipefail
+umask 077  # logs and state hold transcript excerpts: owner-only
 
 HOOKS_LOG="$HOME/.claude/hooks.log"
 
@@ -28,22 +24,12 @@ _read_secret_file() {
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(dirname "$SCRIPT_DIR")"
 CURATE="$REPO/hooks/curate.py"
-VENV_PYTHON="$REPO/.venv/bin/python3"
 
 mkdir -p "$(dirname "$HOOKS_LOG")"
 NOW="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
-# Legacy/standalone config file (pre-plugin installs). Plugin installs instead
-# pass config through CLAUDE_PLUGIN_OPTION_* env vars (handled just below).
-if [[ -f "$REPO/capture.env" ]]; then
-    set -a
-    # shellcheck disable=SC1091
-    source "$REPO/capture.env"
-    set +a
-fi
-
-# Plugin user-config → the env vars curate.py already understands. `:=` only fills
-# a value that isn't already set (so capture.env / a real env var still win).
+# Plugin user-config → the env vars curate.py understands. `:=` only fills a value
+# that isn't already set, so a real env var still wins.
 : "${CAPTURE_VAULT_DIR:=${CLAUDE_PLUGIN_OPTION_VAULT_DIR:-}}"
 : "${CAPTURE_USE_SUBSCRIPTION:=${CLAUDE_PLUGIN_OPTION_USE_SUBSCRIPTION:-}}"
 export CAPTURE_VAULT_DIR CAPTURE_USE_SUBSCRIPTION
@@ -54,7 +40,7 @@ _export_int_setting() {
     local name="$1" value
     value="${!name:-}"
     if [[ -z "$value" ]]; then
-        unset "$name"  # an exported-but-empty value (e.g. from capture.env) too
+        unset "$name"  # an exported-but-empty value too
         return 0
     fi
     if [[ "$value" =~ ^[1-9][0-9]*$ ]]; then
@@ -75,7 +61,7 @@ _export_int_setting CAPTURE_MAX_EST_TOKENS
 : "${CAPTURE_EXCLUDED_COMMANDS:=${CLAUDE_PLUGIN_OPTION_EXCLUDED_COMMANDS:-}}"
 export CAPTURE_EXCLUDED_COMMANDS
 
-# Runtime state goes in the plugin data dir (survives updates); standalone uses eval/state.
+# Runtime state goes in the plugin data dir, which survives plugin updates.
 if [[ -n "${CLAUDE_PLUGIN_DATA:-}" ]]; then
     export CAPTURE_STATE_DIR="$CLAUDE_PLUGIN_DATA/state"
     export SCRUB_FAILURES_PATH="$CLAUDE_PLUGIN_DATA/state/scrub-failures.md"
@@ -138,45 +124,24 @@ fi
 # Ground-truth marker BEFORE backgrounding (pre-log crash gap detection)
 printf 'SESSION_END_RECEIVED\t%s\t%s\n' "$SESSION_ID" "$NOW" >> "$HOOKS_LOG"
 
-# Log which code version handles each session, so a stale deploy shows in hooks.log.
-if [[ -n "${CLAUDE_PLUGIN_ROOT:-}" ]]; then
-    # Plugin: use the plugin version; `git -C` would describe the enclosing repo.
-    # `|| true` so a missing plugin.json can't abort the hook under pipefail.
-    PLUGIN_VERSION="$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
-        "$REPO/.claude-plugin/plugin.json" 2>/dev/null | head -1 || true)"
-    printf 'CAPTURE_DEPLOY\tv%s\tplugin\t%s\n' "${PLUGIN_VERSION:-unknown}" \
-        "$NOW" >> "$HOOKS_LOG"
-else
-    # Standalone checkout: flag HEAD behind the last-fetched origin/main (no fetch).
-    DEPLOY_SHA="$(git -C "$REPO" rev-parse --short HEAD 2>/dev/null || echo unknown)"
-    DEPLOY_STATE="ok"
-    if [[ "$DEPLOY_SHA" == "unknown" ]]; then
-        DEPLOY_STATE="unknown"
-    elif git -C "$REPO" rev-parse --verify -q origin/main >/dev/null 2>&1 \
-        && ! git -C "$REPO" merge-base --is-ancestor origin/main HEAD 2>/dev/null; then
-        DEPLOY_STATE="STALE_DEPLOY(behind origin/main as last fetched)"
-    fi
-    printf 'CAPTURE_DEPLOY\t%s\t%s\t%s\n' "$DEPLOY_SHA" "$DEPLOY_STATE" \
-        "$NOW" >> "$HOOKS_LOG"
-fi
+# Log which plugin version handles each session, so a stale install shows in hooks.log.
+# `|| true` so a missing plugin.json can't abort the hook under pipefail.
+PLUGIN_VERSION="$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
+    "$REPO/.claude-plugin/plugin.json" 2>/dev/null | head -1 || true)"
+printf 'CAPTURE_DEPLOY\tv%s\tplugin\t%s\n' "${PLUGIN_VERSION:-unknown}" "$NOW" >> "$HOOKS_LOG"
 
-# Choose the interpreter. A standalone .venv wins, but never inside a plugin
-# install: a dev `uv sync` venv there lacks claude-agent-sdk and would shadow uv run.
-if [[ -z "${CLAUDE_PLUGIN_ROOT:-}" && -x "$VENV_PYTHON" ]]; then
-    RUN=("$VENV_PYTHON" "$CURATE")
-elif command -v uv >/dev/null 2>&1; then
-    # Built incrementally: "${EMPTY[@]}" is an unbound-variable error under
-    # set -u on macOS's bash 3.2.
-    RUN=(uv run --quiet)
-    if [[ "${CAPTURE_USE_SUBSCRIPTION:-}" == "1" ]]; then
-        RUN+=(--with "claude-agent-sdk==0.2.161")
-    fi
-    RUN+=("$CURATE")
-else
-    printf 'CAPTURE_NO_INTERPRETER\t%s\tneither %s nor uv found — install uv (https://docs.astral.sh/uv/)\n' \
-        "$NOW" "$VENV_PYTHON" >> "$HOOKS_LOG"
+if ! command -v uv >/dev/null 2>&1; then
+    printf 'CAPTURE_NO_INTERPRETER\t%s\tuv not found — install uv (https://docs.astral.sh/uv/)\n' \
+        "$NOW" >> "$HOOKS_LOG"
     exit 0
 fi
+# Built incrementally: "${EMPTY[@]}" is an unbound-variable error under set -u
+# on macOS's bash 3.2.
+RUN=(uv run --quiet)
+if [[ "${CAPTURE_USE_SUBSCRIPTION:-}" == "1" ]]; then
+    RUN+=(--with "claude-agent-sdk==0.2.161")
+fi
+RUN+=("$CURATE")
 
 # Background the worker — detached, stdout/stderr → hooks.log
 nohup "${RUN[@]}" "$TRANSCRIPT_PATH" "$SESSION_ID" "$CWD" \

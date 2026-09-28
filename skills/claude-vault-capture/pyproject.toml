@@ -17,7 +17,7 @@ dependencies = []
 # Dev/test deps in a PEP 735 group, installed by default with `uv sync`. PyYAML
 # is test-only: the runtime parses frontmatter with stdlib regex, never imports yaml.
 # anthropic is pinned to the same version as the PEP 723 block in hooks/curate.py:
-# the tests (and the standalone .venv hook path) import it from this environment.
+# the tests import it from this environment.
 [dependency-groups]
 dev = ["anthropic==0.105.2", "pytest==9.0.3", "pyyaml==6.0.3", "ruff==0.15.16"]
 

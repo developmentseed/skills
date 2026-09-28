@@ -7,6 +7,7 @@ import os
 import pathlib
 import shutil
 import subprocess
+import time
 
 import pytest
 from conftest import wait_for
@@ -369,3 +370,81 @@ class TestPayload:
         assert proc.returncode == 0, proc.stderr
         assert wait_for(invocation)
         assert invocation.read_text().splitlines()[0].endswith("s1 /tmp/my project")
+
+
+class TestHappyPath:
+    def test_marker_logged_and_worker_backgrounded_quickly(self, tmp_path):
+        home = tmp_path / "home"
+        home.mkdir()
+        invocation = _build_plugin(home)
+
+        start = time.monotonic()
+        proc = _run_hook(home)
+        elapsed = time.monotonic() - start
+
+        assert proc.returncode == 0, proc.stderr
+        # backgrounds rather than blocks: a generous CI bound, not the 200 ms target
+        assert elapsed < 2.0, f"hook took {elapsed:.2f}s"
+        hooks_log = (home / ".claude" / "hooks.log").read_text()
+        assert "SESSION_END_RECEIVED\tplugin-sess-1\t" in hooks_log
+        assert wait_for(invocation)
+
+    def test_logs_and_state_are_owner_only(self, tmp_path):
+        home = tmp_path / "home"
+        home.mkdir()
+        _build_plugin(home)
+
+        _run_hook(home)
+
+        assert (home / ".claude" / "hooks.log").stat().st_mode & 0o077 == 0
+        assert (home / "plugin-data" / "state").stat().st_mode & 0o077 == 0
+
+
+class TestGuards:
+    @pytest.mark.parametrize(
+        "payload",
+        [
+            {"transcript_path": "/tmp/t.jsonl", "cwd": "/tmp"},
+            {"session_id": "x", "cwd": "/tmp"},
+        ],
+        ids=["no-session-id", "no-transcript-path"],
+    )
+    def test_incomplete_payload_backgrounds_nothing(self, tmp_path, payload):
+        home = tmp_path / "home"
+        home.mkdir()
+        invocation = _build_plugin(home)
+
+        proc = _run_hook(home, payload=payload)
+
+        assert proc.returncode == 0
+        assert (
+            "SESSION_END_RECEIVED" not in (home / ".claude" / "hooks.log").read_text()
+        )
+        assert not wait_for(invocation, timeout=0.5)
+
+    def test_unconfigured_vault_backgrounds_nothing(self, tmp_path):
+        home = tmp_path / "home"
+        home.mkdir()
+        invocation = _build_plugin(home)
+
+        proc = _run_hook(home, extra_env={"CLAUDE_PLUGIN_OPTION_VAULT_DIR": ""})
+
+        assert proc.returncode == 0
+        assert "CAPTURE_NOT_CONFIGURED" in (home / ".claude" / "hooks.log").read_text()
+        assert not wait_for(invocation, timeout=0.5)
+
+
+class TestSubscriptionTokenFile:
+    def test_owner_only_oauth_token_file_is_used(self, tmp_path):
+        home = tmp_path / "home"
+        home.mkdir()
+        invocation = _build_plugin(home)
+        token = home / ".claude_vault_oauth_token"
+        token.write_text("DUMMY-OAUTH-TOKEN\n")
+        token.chmod(0o600)
+
+        proc = _run_hook(home, extra_env={"CLAUDE_PLUGIN_OPTION_USE_SUBSCRIPTION": "1"})
+
+        assert proc.returncode == 0, proc.stderr
+        assert wait_for(invocation)
+        assert "CLAUDE_CODE_OAUTH_TOKEN=DUMMY-OAUTH-TOKEN" in invocation.read_text()

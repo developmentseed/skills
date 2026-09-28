@@ -450,9 +450,9 @@ def _invoke_via_api_key(
 ) -> tuple[str, int, int]:
     import anthropic
 
-    # max_retries=0 so TIMEOUT_SECONDS is a hard wall — the SDK retries on timeout
-    # by default, which would multiply the effective deadline well past 30s.
-    client = anthropic.Anthropic(max_retries=0)
+    # The SDK's default retries (429/529/5xx, connection errors, timeouts, with
+    # backoff) rescue transient failures; TIMEOUT_SECONDS bounds each attempt.
+    client = anthropic.Anthropic(max_retries=2)
     try:
         msg = client.messages.create(
             model=model,
