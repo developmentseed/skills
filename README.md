@@ -5,6 +5,7 @@ A [Claude Code plugin marketplace](https://docs.anthropic.com/en/docs/claude-cod
 ## What's here
 
 - **[github-issue-to-markdown](skills/github-issue-to-markdown/)**: exports GitHub issues (including from private repos) to structured Markdown using the `gh` CLI
+- **[session-handoffs](skills/session-handoffs/)**: end-of-day wrap-up when you run several Claude Code sessions at once. Checks which ones already left a handoff note, asks only the others (never mid-task), and lists every note in your daily note. Claude Code only
 - **[setup-python-repo](skills/setup-python-repo/)**: scaffolds CI/CD, linting, release automation, and dependency automation for uv-based Python repositories using GitHub Actions
 - **[veda-story-creator](skills/veda-story-creator/)**: generates [VEDA](https://www.earthdata.nasa.gov/dashboard) scrollytelling MDX stories with satellite data visualizations. Includes a dataset catalog, annotated examples, and lessons learned
 
