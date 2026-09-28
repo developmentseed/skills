@@ -39,13 +39,13 @@ python3 "${CLAUDE_SKILL_DIR}/scripts/handoff_status.py" --self '<own name>' --li
 
 Quote each name. Add `--date` if one was given.
 
-The script reads Claude Code's local session registry and transcripts (read-only) and prints one TSV row per handoff note written that day:
+The script reads Claude Code's local session registry and transcripts (read-only) and prints one TSV row per handoff note written that day, with the note's first heading as `title`:
 
 | verdict | meaning | action |
 |---|---|---|
 | `fresh` | running, wrote a handoff, little work since | don't message it; list its note |
 | `stale` | running, wrote one, then did a lot more (over 10 tool calls) | ask for an update |
-| `none` | running, no usable handoff that day (none written, the write failed, or the note sits in a temp dir or worktree) | ask for one |
+| `none` | running, no usable handoff that day (none written, the write failed, the note sits in a temp dir or worktree, or it opens with a SUPERSEDED banner) | ask for one |
 | `unknown` | running, but not found in the registry | ask for one |
 | `closed` | no longer running, left a handoff | list its note |
 | `closed-none` | no longer running, worked that day, no handoff | report only: nobody to ask |
@@ -64,7 +64,7 @@ The request is plain text: an `@path` or a `/command` inside a message does noth
 
 ```text
 End-of-day handoff request from <me> (/session-handoffs): please make sure today's work in this session has a handoff note, then reply.
-- If a handoff note that THIS session wrote today is still current, don't touch it: just reply.
+- If a handoff note that THIS session wrote today is still current, don't touch it: just reply. If another session's note has replaced yours, reply NONE with that note's path.
 - Otherwise write one, or update your own with Edit, changing only what changed. Never rewrite a whole note, never edit a note another session wrote.
 - Name new notes handoff_<date>_<topic>.md and save them in the directory that holds your memory/ directory (~/.claude/projects/<project>/). Never in a git worktree, the session scratchpad or /tmp: those get deleted.
 - Make it self-contained for a fresh session with no context: one-line status; current state; ordered next steps starting with a concrete first action; decisions waiting on the user; traps; branches, PRs, worktrees and paths; how to resume.
@@ -87,9 +87,10 @@ Only this session writes the daily note: several sessions writing at once would 
 
 - Find the `session-handoffs daily note:` line in the user's CLAUDE.md or memory and fill in `{date}`. If there is none, print the list instead.
 - Insert under that heading, before the next heading: `high` items at the top of the list, `normal` items after the items already there. Skip a path already in the note.
-- Add the `fresh` and `closed` notes right after step 2, then each reply as it arrives:
-  `` - [ ] **<title>:** <first action>. Handoff: `<path, with ~ for the home directory>` ``
-  For notes nobody replied about, use the note's first heading as the title and "continue from the handoff" as the action. Append ` (important)` to the title of `high` items.
+- Add the `fresh` and `closed` notes right after step 2, then each reply as it arrives. A `stale` session that ends without a `HANDOFF` reply (no reply, held, not asked, still busy when the user stops) still gets its existing notes listed. One line per note, path with `~` for the home directory:
+  - reply: `` - [ ] **<title>:** <first action> `<path>` ``, with ` (important)` after the title of `high` items
+  - no reply: `` - [ ] **<title>** `<path>` ``
+- Keep titles to a few words. For notes nobody replied about, take the script's `title` column (the note's first heading, else its file name) and drop a leading "Handoff"/"Handoff —"/"Handoff:" label, dates, and "(written …)" or "START HERE" parts: "Handoff — S2 drain + storage budget, Monday 28 Sep (written Fri 25 Sep ~10:30Z)" becomes "S2 drain + storage budget".
 - Change nothing else in the note.
 
 ### 6. Report
@@ -102,6 +103,6 @@ Keep this session open until every peer is done: closing it drops the pending su
 
 - The check relies on Claude Code's local session registry and transcript format, which are not a documented interface. When it can't match a session, that session is simply asked.
 - Only Write and Edit tool calls are seen (the session's own and its subagents'). A note written through the shell isn't detected, so that session gets asked and just replies with the path.
-- A note counts as a handoff when its file name contains "handoff", ends in `.md`, isn't under `memory/`, any date in its name is the day being checked, and it still exists outside temp dirs and `.claude/worktrees/`.
+- A note counts as a handoff when its file name contains "handoff", ends in `.md`, isn't under `memory/`, the latest date in its name (if any) isn't before the day checked, it still exists outside temp dirs and `.claude/worktrees/`, and it doesn't open with a SUPERSEDED banner (a line starting with that word, after any frontmatter).
 - The check reads `$CLAUDE_CONFIG_DIR` if set, else `~/.claude`.
 - Each peer's write may trigger a permission prompt in its own terminal.

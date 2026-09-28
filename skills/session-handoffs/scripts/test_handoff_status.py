@@ -49,10 +49,10 @@ class HandoffStatusTest(unittest.TestCase):
             self.addCleanup(patcher.stop)
         time.tzset()
 
-    def note(self, rel):
+    def note(self, rel, body="# note"):
         path = self.dir / "notes" / rel
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text("# note")
+        path.write_text(body)
         return str(path)
 
     def session(self, pid, name, session_id, updated=1):
@@ -146,26 +146,63 @@ class HandoffStatusTest(unittest.TestCase):
 
     def test_only_usable_notes_from_that_day_count(self):
         self.session(1, "s", sid("a"))
-        kept = self.note("HANDOFF-cache.md")  # undated note: counts
+        undated = self.note("HANDOFF-cache.md")
+        ahead = self.note(
+            "handoff_2026-09-30_wednesday.md"
+        )  # written ahead for a later day
+        skipped = [
+            self.note("memory/project-handoff.md"),  # memory pointer
+            self.note("handoff_2026-09-25_old.md"),  # older note, edited that day
+            self.note("handoff_s2_purge_20260903.md"),  # older, compact date
+            self.note("handoff_status.py"),  # not a note
+            str(self.dir / f"handoff_{DAY}_denied.md"),  # write never landed
+            self.note(f".claude/worktrees/x/handoff_{DAY}.md"),  # worktree
+        ]
         self.transcript(
             sid("a"),
-            call("Write", self.note("memory/project-handoff.md")),  # memory pointer
-            call(
-                "Write", self.note("handoff_2026-09-25_old.md")
-            ),  # older note, edited that day
-            call("Write", self.note("handoff_status.py")),  # not a note
+            *[call("Write", p) for p in skipped],
             call(
                 "Write", self.note(f"handoff_{DAY}_b.md"), day="2026-09-27"
             ),  # other day
-            call(
-                "Write", str(self.dir / f"handoff_{DAY}_denied.md")
-            ),  # write never landed
-            call(
-                "Write", self.note(f".claude/worktrees/x/handoff_{DAY}.md")
-            ),  # worktree
-            call("Edit", kept),
+            call("Edit", undated),
+            call("Write", ahead),
         )
-        self.assertEqual([r["path"] for r in self.run_report("--live", "s")], [kept])
+        rows = self.run_report("--live", "s")
+        self.assertEqual({r["path"] for r in rows}, {undated, ahead})
+
+    def test_superseded_banner_and_titles(self):
+        self.session(1, "s", sid("a"))
+        new = self.note(
+            f"handoff_{DAY}_part3.md", "# Handoff: part 3\n\nSupersedes the old one."
+        )
+        old = self.note(
+            f"handoff_{DAY}_old.md", "# Handoff: old\n\n> ⏭️ **SUPERSEDED by part3**\n"
+        )
+        front = self.note(
+            f"handoff_{DAY}_front.md",
+            "---\ntitle: x\ntags: [a]\ncreated: 1\n---\n\n## Front\n\n> SUPERSEDED as entry point\n",
+        )
+        prose = self.note(
+            f"handoff_{DAY}_prose.md",
+            "\ufeff# Prose\n\nThe plan's scope table is superseded by §2.\n",
+        )
+        partly = self.note(
+            f"handoff_{DAY}_partly.md", "PARTLY SUPERSEDED: see §3\n\nbody"
+        )
+        self.transcript(
+            sid("a"),
+            call("Write", new, 9),
+            *[call("Edit", p, 10) for p in (old, front, prose, partly)],
+        )
+        rows = self.run_report("--live", "s")
+        self.assertCountEqual(
+            [(r["path"], r["title"]) for r in rows],
+            [
+                (new, "Handoff: part 3"),
+                (prose, "Prose"),
+                (partly, f"handoff_{DAY}_partly"),
+            ],
+        )
 
     def test_subagent_work_counts_towards_staleness(self):
         self.session(1, "s", sid("a"))

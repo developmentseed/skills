@@ -8,11 +8,12 @@ documented interface: a running session that can't be matched is reported as `un
 caller asks it instead. <config> is $CLAUDE_CONFIG_DIR, else ~/.claude.
 
 A note counts as a handoff when its file name contains "handoff", it ends in .md, it is not
-under a memory/ directory, and any date in its name is the day being checked. It must also
-still exist and not sit in a temp directory or a .claude/worktrees/ checkout (both get deleted).
+under a memory/ directory, and the latest date in its name (if any) is not before the day
+checked. It must also still exist, not sit in a temp directory or a .claude/worktrees/
+checkout (both get deleted), and not open with a SUPERSEDED banner.
 
 Prints TSV, one row per handoff note (one row per session without one):
-  verdict  session  written  calls_after  last_active  project  path
+  verdict  session  written  calls_after  last_active  project  path  title
 verdict: fresh | stale | none | unknown   (running sessions, from --live)
          closed | closed-none             (sessions no longer running that worked that day)
 """
@@ -27,27 +28,43 @@ from pathlib import Path
 SESSION_ID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 TEMP_ROOTS = ("/tmp/", "/private/tmp/", "/var/folders/", "/private/var/folders/")
 STALE_AFTER = 10  # tool calls after the latest handoff that make it stale
+NAME_DATE = re.compile(r"(20\d\d)[-_]?([01]\d)[-_]?([0-3]\d)")
+# a line that opens with the word, e.g. "> ⏭️ **SUPERSEDED by x.md**"; "superseded in part" doesn't count
+BANNER = re.compile(r"\W*superseded\b(?!\s+in\s+part)", re.I)
 
 
 def is_handoff(path, day):
     name = Path(path).name.lower()
-    # an older note edited today (e.g. marked superseded) is not today's handoff
-    dates = set(re.findall(r"\d{4}-\d{2}-\d{2}", name))
+    # an older note edited today is not today's handoff; one named for a later day (written
+    # ahead, e.g. for Monday) is
+    dates = {"-".join(d) for d in NAME_DATE.findall(name)}
     return (
         "handoff" in name
         and name.endswith(".md")
         and "/memory/" not in path
-        and (not dates or day.isoformat() in dates)
+        and (not dates or max(dates) >= day.isoformat())
     )
 
 
-def usable(path):
-    # a denied or failed Write leaves no file; temp dirs and worktrees get deleted
-    return (
-        Path(path).is_file()
-        and not path.startswith(TEMP_ROOTS)
-        and "/.claude/worktrees/" not in path
-    )
+def note_title(path):
+    """Return the note's title (first heading, else its file name), or None if it can't be used:
+    a denied or failed Write leaves no file, temp dirs and worktrees get deleted, and a note that
+    opens with a SUPERSEDED banner points to another note."""
+    if path.startswith(TEMP_ROOTS) or "/.claude/worktrees/" in path:
+        return None
+    try:
+        with open(path, encoding="utf-8-sig", errors="replace") as fh:
+            lines = [fh.readline().strip() for _ in range(40)]
+    except OSError:
+        return None
+    if lines[0] == "---":  # skip YAML frontmatter
+        end = next((i for i, line in enumerate(lines[1:], 1) if line == "---"), 0)
+        lines = lines[end + 1 :]
+    head = [line for line in lines if line][:6]
+    if any(BANNER.match(line) for line in head):
+        return None
+    heading = next((h.lstrip("#").strip() for h in head if h.startswith("#")), "")
+    return heading or Path(path).stem
 
 
 def tilde(path):
@@ -60,7 +77,7 @@ def hhmm(ts):
 
 
 def scan(transcripts, day):
-    """Return ({handoff path: last write time}, [tool call times]) for calls made on `day`."""
+    """Return ({handoff path: (last write time, title)}, [tool call times]) for calls on `day`."""
     handoffs, calls = {}, []
     for transcript in transcripts:
         try:
@@ -87,7 +104,11 @@ def scan(transcripts, day):
                     path = (block.get("input") or {}).get("file_path") or ""
                     if block.get("name") in ("Write", "Edit") and is_handoff(path, day):
                         handoffs[path] = max(ts, handoffs.get(path, ts))
-    return {p: ts for p, ts in handoffs.items() if usable(p)}, calls
+    notes = {}
+    for path, ts in handoffs.items():
+        if (title := note_title(path)) is not None:
+            notes[path] = (ts, title)
+    return notes, calls
 
 
 def main(argv=None):
@@ -134,6 +155,7 @@ def main(argv=None):
             "last_active",
             "project",
             "path",
+            "title",
         )
     ]
     seen = set()
@@ -156,12 +178,12 @@ def main(argv=None):
         seen.add(sid)
         last = max(calls, default=None)
         if handoffs:
-            latest = max(handoffs.values())
+            latest = max(ts for ts, _ in handoffs.values())
             after = sum(c > latest for c in calls)
             verdict = (
                 ("fresh" if after <= STALE_AFTER else "stale") if name else "closed"
             )
-            for path, ts in sorted(handoffs.items(), key=lambda kv: kv[1]):
+            for path, (ts, title) in sorted(handoffs.items(), key=lambda kv: kv[1][0]):
                 rows.append(
                     (
                         verdict,
@@ -171,6 +193,7 @@ def main(argv=None):
                         hhmm(last),
                         t.parent.name,
                         tilde(path),
+                        title.replace("\t", " "),
                     )
                 )
         else:
@@ -183,14 +206,15 @@ def main(argv=None):
                     hhmm(last),
                     t.parent.name,
                     "-",
+                    "-",
                 )
             )
 
     for n in names:
         if n not in registry:
-            rows.append(("unknown", n, "-", "-", "-", "-", "-"))
+            rows.append(("unknown", n, "-", "-", "-", "-", "-", "-"))
         elif registry[n]["sessionId"] not in seen:
-            rows.append(("none", n, "-", "-", "-", "-", "-"))
+            rows.append(("none", n, "-", "-", "-", "-", "-", "-"))
 
     print("\n".join("\t".join(r) for r in rows))
 
