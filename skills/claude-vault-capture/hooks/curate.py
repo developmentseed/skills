@@ -505,6 +505,7 @@ def _invoke_via_subscription(
     to the result message; CLI teardown happens after it.
     """
     import asyncio
+    import contextlib
     from claude_agent_sdk import (
         query,
         ClaudeAgentOptions,
@@ -515,23 +516,24 @@ def _invoke_via_subscription(
 
     prompt = _SUBSCRIPTION_DIRECTIVE + user_text
 
-    async def _run() -> tuple[str, int | None, int | None]:
-        options = ClaudeAgentOptions(
-            system_prompt=system_prompt,
-            model=model,
-            max_turns=4,
-            tools=[],
-            allowed_tools=[],
-            setting_sources=[],
-            thinking={"type": "disabled"},
-            env={"CLAUDE_CODE_MAX_OUTPUT_TOKENS": str(MAX_TOKENS_A)},
-        )
+    options = ClaudeAgentOptions(
+        system_prompt=system_prompt,
+        model=model,
+        max_turns=4,
+        tools=[],
+        allowed_tools=[],
+        setting_sources=[],
+        thinking={"type": "disabled"},
+        env={"CLAUDE_CODE_MAX_OUTPUT_TOKENS": str(MAX_TOKENS_A)},
+    )
+
+    async def _consume(stream) -> tuple[str, int | None, int | None]:
         parts: list[str] = []  # every text block in stream order, for salvage
         reply: list[str] = []  # text of the latest assistant message only
         tokens_in: int | None = None
         tokens_out: int | None = None
         try:
-            async for message in query(prompt=prompt, options=options):
+            async for message in stream:
                 if isinstance(message, AssistantMessage):
                     # e.g. auth failure or rate limit: its text is not a reply
                     if message.error:
@@ -554,7 +556,7 @@ def _invoke_via_subscription(
                     tokens_out = usage.get("output_tokens", 0) or 0
                     if message.is_error and not reply:
                         raise RuntimeError(f"{message.subtype}: {message.result}")
-                    break  # the reply is complete; don't wait for CLI teardown
+                    break  # the reply is complete; teardown happens in _main
         except Exception as exc:
             # The SDK raises on a CLI error result (e.g. error_max_turns) after
             # the reply may already have streamed; keep it — it was paid for.
@@ -567,8 +569,18 @@ def _invoke_via_subscription(
         # would turn an exact `null` into malformed_json.
         return "".join(reply).strip(), tokens_in, tokens_out
 
-    # asyncio.TimeoutError is TimeoutError on 3.11+, which run_capture catches.
-    return asyncio.run(asyncio.wait_for(_run(), timeout=TIMEOUT_SECONDS))
+    async def _main() -> tuple[str, int | None, int | None]:
+        stream = query(prompt=prompt, options=options)
+        try:
+            # asyncio.TimeoutError is TimeoutError on 3.11+, which run_capture catches.
+            return await asyncio.wait_for(_consume(stream), timeout=TIMEOUT_SECONDS)
+        finally:
+            # Reap the CLI inside the loop, outside the timeout: left to
+            # asyncio.run's shutdown it exits after the loop closes and warns.
+            with contextlib.suppress(Exception):
+                await asyncio.wait_for(stream.aclose(), timeout=10)
+
+    return asyncio.run(_main())
 
 
 def _call_path_a(scrubbed_text: str, prompts_dir: pathlib.Path) -> dict | None:

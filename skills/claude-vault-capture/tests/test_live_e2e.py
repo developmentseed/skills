@@ -28,7 +28,7 @@ def test_subscription_pipeline_writes_artifact(tmp_path, monkeypatch):
     monkeypatch.delenv("CAPTURE_MOCK_SDK", raising=False)
 
     vault_dir = tmp_path / "vault"
-    (vault_dir / "Inbox" / "auto").mkdir(parents=True)
+    (vault_dir / "Inbox" / "auto").mkdir(parents=True, exist_ok=True)
     log_path = tmp_path / "log.md"
     index_path = tmp_path / "session-index.tsv"
 
