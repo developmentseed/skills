@@ -2,6 +2,7 @@
 headroom, salvage of text streamed before an error, and None usage when none arrived.
 """
 
+import json
 import sys
 import types
 from dataclasses import dataclass, field
@@ -75,7 +76,7 @@ def test_clean_run_returns_text_and_tokens(monkeypatch):
         ],
     )
     text, tokens_in, tokens_out = curate._invoke_via_subscription(
-        "claude-sonnet-5", "system", "transcript"
+        "claude-sonnet-5-5", "system", "transcript"
     )
     assert text == '{"title": "x"}'
     assert tokens_in == 60
@@ -85,7 +86,7 @@ def test_clean_run_returns_text_and_tokens(monkeypatch):
 def test_options_disable_tools_and_leave_turn_headroom(monkeypatch):
     """allowed_tools=[] only skips prompting; tools=[] is what removes the toolset."""
     _install_fake_sdk(monkeypatch, [_AssistantMessage(content=[_TextBlock("null")])])
-    curate._invoke_via_subscription("claude-sonnet-5", "system", "transcript")
+    curate._invoke_via_subscription("claude-sonnet-5-5", "system", "transcript")
     assert _CapturedOptions.last_kwargs["tools"] == []
     assert _CapturedOptions.last_kwargs["allowed_tools"] == []
     assert _CapturedOptions.last_kwargs["max_turns"] > 1
@@ -102,7 +103,7 @@ def test_multi_turn_preamble_is_not_prepended_to_reply(monkeypatch):
         ],
     )
     text, _, _ = curate._invoke_via_subscription(
-        "claude-sonnet-5", "system", "transcript"
+        "claude-sonnet-5-5", "system", "transcript"
     )
     assert text == "null"
 
@@ -119,7 +120,7 @@ def test_error_after_streamed_reply_is_salvaged_with_unknown_usage(monkeypatch):
         ),
     )
     text, tokens_in, tokens_out = curate._invoke_via_subscription(
-        "claude-sonnet-5", "system", "transcript"
+        "claude-sonnet-5-5", "system", "transcript"
     )
     # On error the whole stream is kept (_salvage_artifact finds the JSON later);
     # usage that never arrived is None, not a fake 0.
@@ -135,17 +136,21 @@ def test_error_before_any_reply_still_raises(monkeypatch):
         error=Exception("Claude Code returned an error result: success"),
     )
     with pytest.raises(Exception, match="error result"):
-        curate._invoke_via_subscription("claude-sonnet-5", "system", "transcript")
+        curate._invoke_via_subscription("claude-sonnet-5-5", "system", "transcript")
 
 
 def test_run_is_isolated_like_api_mode(monkeypatch):
     """No user settings (else this plugin's own SessionEnd hook fires on the
-    curation session), no thinking, and output capped like API mode."""
+    curation session), no thinking, low effort, and output capped like API mode."""
     _install_fake_sdk(monkeypatch, [_AssistantMessage(content=[_TextBlock("null")])])
-    curate._invoke_via_subscription("claude-sonnet-5", "system", "transcript")
+    curate._invoke_via_subscription("claude-sonnet-5-5", "system", "transcript")
     kw = _CapturedOptions.last_kwargs
     assert kw["setting_sources"] == []
-    assert kw["thinking"] == {"type": "disabled"}
+    assert "thinking" not in kw
+    assert kw["effort"] == "low"
+    assert kw["env"]["CLAUDE_CODE_DISABLE_THINKING"] == "1"
+    extra_body = json.loads(kw["env"]["CLAUDE_CODE_EXTRA_BODY"])
+    assert extra_body == {"thinking": {"type": "between_tools"}}
     assert kw["env"]["CLAUDE_CODE_MAX_OUTPUT_TOKENS"] == str(curate.MAX_TOKENS_A)
 
 
@@ -156,7 +161,7 @@ def test_assistant_error_is_raised_not_parsed_as_a_reply(monkeypatch):
         [_AssistantMessage(content=[login], error="authentication_failed")],
     )
     with pytest.raises(RuntimeError, match="authentication_failed"):
-        curate._invoke_via_subscription("claude-sonnet-5", "system", "transcript")
+        curate._invoke_via_subscription("claude-sonnet-5-5", "system", "transcript")
 
 
 def test_error_result_without_a_reply_raises(monkeypatch):
@@ -165,7 +170,7 @@ def test_error_result_without_a_reply_raises(monkeypatch):
     )
     _install_fake_sdk(monkeypatch, [failed])
     with pytest.raises(RuntimeError, match="error_during_execution"):
-        curate._invoke_via_subscription("claude-sonnet-5", "system", "transcript")
+        curate._invoke_via_subscription("claude-sonnet-5-5", "system", "transcript")
 
 
 def test_returns_at_the_result_without_waiting_for_teardown(monkeypatch):
@@ -179,6 +184,6 @@ def test_returns_at_the_result_without_waiting_for_teardown(monkeypatch):
         error=Exception("teardown failure"),
     )
     text, tokens_in, tokens_out = curate._invoke_via_subscription(
-        "claude-sonnet-5", "system", "transcript"
+        "claude-sonnet-5-5", "system", "transcript"
     )
     assert (text, tokens_in, tokens_out) == ("null", 5, 2)

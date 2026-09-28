@@ -169,7 +169,7 @@ elif command -v uv >/dev/null 2>&1; then
     # set -u on macOS's bash 3.2.
     RUN=(uv run --quiet)
     if [[ "${CAPTURE_USE_SUBSCRIPTION:-}" == "1" ]]; then
-        RUN+=(--with "claude-agent-sdk==0.2.89")
+        RUN+=(--with "claude-agent-sdk==0.2.161")
     fi
     RUN+=("$CURATE")
 else

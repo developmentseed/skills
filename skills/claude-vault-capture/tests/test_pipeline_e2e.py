@@ -37,7 +37,7 @@ class TestFullPipeline:
         assert fm_a["source"] == "claude-code-curated"
         assert fm_a["type"] == "decision"
         assert fm_a["session_id"] == sid
-        assert fm_a["model"] == "claude-sonnet-5"
+        assert fm_a["model"] == "claude-sonnet-5-5"
 
         assert len(entries) == 1
         e = entries[0]

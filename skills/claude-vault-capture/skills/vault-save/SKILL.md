@@ -39,7 +39,7 @@ Derive the following fields from the document content and the current working di
 
 **created** — today's date in YYYY-MM-DD format.
 
-**model** — the current model ID (e.g. `claude-sonnet-5`).
+**model** — the current model ID (e.g. `claude-sonnet-5-5`).
 
 > **No secret scrubbing on this path.** Automatic session capture runs everything
 > through a regex scrubber; `/vault-save` does not — you are writing the document

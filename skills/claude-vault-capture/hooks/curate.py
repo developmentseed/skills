@@ -60,8 +60,8 @@ def _env_int(name: str, default: int, minimum: int = 1) -> int:
     return value if value >= minimum else default
 
 
-MODEL_A = "claude-sonnet-5"
-# Sonnet 5's tokenizer emits ~30% more tokens than 4.6; 2000 truncated artifacts mid-JSON.
+MODEL_A = "claude-sonnet-5-5"
+# The Sonnet 5/5.5 tokenizer emits ~30% more tokens than 4.6; 2000 truncated artifacts mid-JSON.
 MAX_TOKENS_A = 3000
 # Hard wall on one model call (the whole call runs in the background).
 TIMEOUT_SECONDS: int = _env_int("CAPTURE_TIMEOUT_SECONDS", 30)
@@ -458,9 +458,9 @@ def _invoke_via_api_key(
             model=model,
             max_tokens=max_tokens,
             system=system_prompt,
-            # Sonnet 5 thinks by default, and thinking shares max_tokens with the
-            # reply, so leaving it on can truncate the JSON.
-            thinking={"type": "disabled"},
+            # Sonnet 5.5 rejects "disabled"; between_tools is its thinking-off setting.
+            thinking={"type": "between_tools"},
+            output_config={"effort": "low"},
             messages=[{"role": "user", "content": user_text}],
             timeout=TIMEOUT_SECONDS,
         )
@@ -523,8 +523,16 @@ def _invoke_via_subscription(
         tools=[],
         allowed_tools=[],
         setting_sources=[],
-        thinking={"type": "disabled"},
-        env={"CLAUDE_CODE_MAX_OUTPUT_TOKENS": str(MAX_TOKENS_A)},
+        effort="low",
+        env={
+            "CLAUDE_CODE_MAX_OUTPUT_TOKENS": str(MAX_TOKENS_A),
+            # Else the CLI adds a clear_thinking context edit, which 400s with between_tools.
+            "CLAUDE_CODE_DISABLE_THINKING": "1",
+            # The CLI has no --thinking between_tools; its extra body overrides `thinking`.
+            "CLAUDE_CODE_EXTRA_BODY": json.dumps(
+                {"thinking": {"type": "between_tools"}}
+            ),
+        },
     )
 
     async def _consume(stream) -> tuple[str, int | None, int | None]:
@@ -584,7 +592,7 @@ def _invoke_via_subscription(
 
 
 def _call_path_a(scrubbed_text: str, prompts_dir: pathlib.Path) -> dict | None:
-    """Call claude-sonnet-5 with the curation prompt.
+    """Call claude-sonnet-5-5 with the curation prompt.
 
     Returns the artifact dict with usage keys (tokens_in/tokens_out/cost_usd)
     merged in. A model null returns the usage dict plus {"_null": True} so the
@@ -660,7 +668,7 @@ def _call_path_a(scrubbed_text: str, prompts_dir: pathlib.Path) -> dict | None:
 
 
 def _estimate_cost_a(tokens_in: int, tokens_out: int) -> float:
-    # claude-sonnet-5 list price: $2/M input, $10/M output. Under subscription
+    # claude-sonnet-5-5 list price: $2/M input, $10/M output. Under subscription
     # this is an API-equivalent estimate, not a billed amount.
     return (tokens_in * 2 + tokens_out * 10) / 1_000_000
 

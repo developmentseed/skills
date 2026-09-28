@@ -85,9 +85,9 @@ def test_run_capture_maps_api_timeout_to_skip_reason(monkeypatch, temp_vault):
     assert entries[0]["skip_reason_a"] == "timeout"
 
 
-class TestSonnet5RequestShape:
-    """Omitting `thinking` enables adaptive thinking, which shares max_tokens with
-    the reply and would truncate the JSON into malformed_json."""
+class TestSonnet55RequestShape:
+    """Sonnet 5.5 rejects disabled thinking; adaptive thinking would share max_tokens
+    with the reply and truncate the JSON into malformed_json."""
 
     def _capture_kwargs(self, monkeypatch):
         seen = {}
@@ -110,18 +110,24 @@ class TestSonnet5RequestShape:
             pass
         return seen
 
-    def test_thinking_is_explicitly_disabled(self, monkeypatch):
-        assert self._capture_kwargs(monkeypatch).get("thinking") == {"type": "disabled"}
+    def test_up_front_thinking_is_off(self, monkeypatch):
+        kwargs = self._capture_kwargs(monkeypatch)
+        assert kwargs.get("thinking") == {"type": "between_tools"}
+
+    def test_effort_is_low(self, monkeypatch):
+        # between_tools is only accepted at effort low/medium/high.
+        kwargs = self._capture_kwargs(monkeypatch)
+        assert kwargs.get("output_config") == {"effort": "low"}
 
     def test_no_removed_sampling_params(self, monkeypatch):
-        # temperature / top_p / top_k are rejected with a 400 on Sonnet 5.
+        # temperature / top_p / top_k are rejected with a 400 on Sonnet 5.5.
         kwargs = self._capture_kwargs(monkeypatch)
         assert not {"temperature", "top_p", "top_k"} & set(kwargs)
 
     def test_output_budget_has_headroom_for_the_new_tokenizer(self, monkeypatch):
         assert curate.MAX_TOKENS_A >= 2600  # ~30% above the Sonnet 4.6 budget of 2000
 
-    def test_cost_estimate_uses_sonnet5_list_price(self):
+    def test_cost_estimate_uses_sonnet55_list_price(self):
         assert curate._estimate_cost_a(1_000_000, 1_000_000) == 12.0  # $2 in + $10 out
 
 

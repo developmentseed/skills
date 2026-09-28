@@ -125,7 +125,7 @@ class TestUvRunBranch:
         assert proc.returncode == 0, proc.stderr
         assert wait_for(invocation)
         argv = invocation.read_text().splitlines()[0]
-        assert "--with claude-agent-sdk==0.2.89" in argv
+        assert "--with claude-agent-sdk==0.2.161" in argv
 
 
 class TestPluginConfigMapping:
