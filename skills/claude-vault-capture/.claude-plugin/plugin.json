@@ -1,7 +1,7 @@
 {
   "name": "claude-vault-capture",
   "description": "Automatically turns Claude Code sessions into curated Obsidian notes. On SessionEnd a backgrounded worker scrubs secrets, sends the transcript to a model, and writes a decision/runbook/gotcha/spec to your vault's Inbox/auto/. Makes a paid model call per qualifying session (~$0.13 median, or bill it to a Claude Pro/Max plan). Includes the /vault-save skill for on-demand exports.",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "author": { "name": "Loïc Houpert" },
   "homepage": "https://github.com/developmentseed/claude-vault-capture",
   "repository": "https://github.com/developmentseed/skills",
