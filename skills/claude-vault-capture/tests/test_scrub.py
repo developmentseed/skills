@@ -9,15 +9,11 @@ import pytest
 # ─────────────────────────── helpers ──────────────────────────────────────────
 
 
-# PEM markers are assembled at runtime, never stored verbatim (in fixtures OR
-# this file): GitHub push protection and gitleaks match the BEGIN/END lines
-# themselves, fake body or not, so a real-format block at rest would flag this
-# repo and every clone of it.
+# PEM markers are assembled at runtime: secret scanners (GitHub push protection,
+# gitleaks) flag BEGIN/END lines at rest, even around a fake body.
 def _pem(kind: str, body: str) -> str:
     marker = "-----{edge} " + kind + " KEY-----"
-    return (
-        marker.format(edge="BEGIN") + "\n" + body + "\n" + marker.format(edge="END")
-    )
+    return marker.format(edge="BEGIN") + "\n" + body + "\n" + marker.format(edge="END")
 
 
 def load_fixture(name: str) -> str:
@@ -135,10 +131,6 @@ class TestEnvVar:
         assert "super_secret_value" not in out
 
     def test_value_inside_key_preserves_key(self):
-        """The replacement is a regex template, so the pre-value span is
-        written back verbatim even when the value string reoccurs inside it.
-        Deliberate divergence from the pre-template group(0).replace behavior,
-        which mangled the key on inputs like this."""
         from scrub import scrub
 
         out, counts = scrub("PASSKEY=PASS")
@@ -175,8 +167,6 @@ class TestEnvVar:
 
 
 class TestEnvVarBeyondLineStart:
-    """The ^-anchored rule missed exactly the forms transcripts contain most."""
-
     def test_export_prefix(self):
         from scrub import scrub
 
@@ -227,6 +217,12 @@ class TestModernTokenFormats:
         out, _ = scrub("sk-svcacct-XyZ987_abcDEF654ghiJKL321")
         assert "XyZ987" not in out
 
+    def test_project_key_with_dashes_in_body_fully_redacted(self):
+        from scrub import scrub
+
+        out, _ = scrub("key: sk-proj-Ab-12Cd34Ef56Gh78-Ij90Kl12_Mn34Op56 end")
+        assert out == "key: <redacted:token_prefix> end"
+
     def test_fine_grained_github_pat(self):
         from scrub import scrub
 
@@ -236,9 +232,7 @@ class TestModernTokenFormats:
 
 
 class TestBareKeywordEnvVars:
-    """The commonest .env / docker-compose forms: the keyword IS the whole name.
-    A mandatory leading [A-Z] in the key pattern made these unmatchable, so every
-    one of them passed through in clear while `redactions:` reported 0."""
+    """The commonest .env / docker-compose forms: the keyword IS the whole name."""
 
     @pytest.mark.parametrize(
         "line",
@@ -261,9 +255,7 @@ class TestBareKeywordEnvVars:
 
 
 class TestTokenPrefixFalsePositives:
-    """The widened `sk-` alternative must not eat ordinary hyphenated prose.
-    A greedy sk-[A-Za-z0-9_-]{4,} turned "risk-averse-approach" into
-    "ri<redacted>", silently corrupting the archived note."""
+    """The `sk-` rule must not eat ordinary hyphenated prose."""
 
     @pytest.mark.parametrize(
         "text",
@@ -390,10 +382,7 @@ class TestMalformedRule:
         import scrub as scrub_mod
         import importlib
 
-        # Set the failures path BEFORE reloading: reload re-runs scrub.py's
-        # module-level _compile_rules(), which logs the bad rule on import. If
-        # the env override isn't set yet, that log leaks to the real
-        # eval/state/scrub-failures.md instead of tmp_path.
+        # Set before reload: reload re-runs _compile_rules(), which logs the bad rule.
         os.environ["SCRUB_FAILURES_PATH"] = str(tmp_path / "scrub-failures.md")
 
         original_rules = scrub_rules.RULES[:]
@@ -419,9 +408,7 @@ class TestMalformedRule:
             os.environ.pop("SCRUB_FAILURES_PATH", None)
 
     def test_bad_template_skipped_no_exception(self, tmp_path):
-        """A rule whose PATTERN compiles but whose replacement template is
-        invalid must be skipped at compile time, not abort every scrub call:
-        templates are parsed eagerly on each subn, even with zero matches."""
+        """Templates are parsed on every subn, so drop a bad one at compile time."""
         import scrub_rules
         import scrub as scrub_mod
         import importlib

@@ -11,16 +11,11 @@ set -euo pipefail
 
 HOOKS_LOG="$HOME/.claude/hooks.log"
 
-# Print a credential file's contents only if it is owner-only (mode *00); a
-# hand-made `echo $TOKEN > file` is 644, i.e. readable by every local user, and
-# must not be treated as a usable credential. stat -f is macOS/BSD, -c is GNU.
+# Print a credential file only if it is owner-only (mode *00); a hand-made
+# `echo $TOKEN > file` is 644, readable by every local user.
 _read_secret_file() {
     local f="$1" perms
-    # -L follows symlinks: a token symlinked to a 600 file would otherwise be
-    # stat'd as the link itself (777 on macOS) and refused, with a chmod hint
-    # that cannot fix it. GNU -c is probed FIRST because BSD stat rejects it
-    # cleanly (rc=1, empty), whereas GNU stat treats -f as "filesystem" and
-    # prints a multi-line blob that would land in hooks.log as the mode.
+    # -L: judge the symlink target. GNU -c first: GNU stat misreads BSD's -f.
     perms="$(stat -L -c '%a' "$f" 2>/dev/null || stat -L -f '%Lp' "$f" 2>/dev/null)" || return 1
     if [[ "$perms" != *00 ]]; then
         printf 'CAPTURE_TOKEN_FILE_PERMS\t%s\t%s is mode %s (group/other-readable) — refusing to use it; run: chmod 600 %s\n' \
@@ -30,14 +25,11 @@ _read_secret_file() {
     cat "$f"
 }
 
-# Resolve the repo from this script's own location so the checkout can live anywhere.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(dirname "$SCRIPT_DIR")"
 CURATE="$REPO/hooks/curate.py"
 VENV_PYTHON="$REPO/.venv/bin/python3"
 
-# Every branch below may log; guarantee the destination and one coherent
-# timestamp up front (each $(date) is a fork — this is the <200ms close path).
 mkdir -p "$(dirname "$HOOKS_LOG")"
 NOW="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
@@ -56,22 +48,18 @@ fi
 : "${CAPTURE_USE_SUBSCRIPTION:=${CLAUDE_PLUGIN_OPTION_USE_SUBSCRIPTION:-}}"
 export CAPTURE_VAULT_DIR CAPTURE_USE_SUBSCRIPTION
 
-# Numeric settings are exported only when they really are integers: curate.py
-# reads them with *string* defaults — os.environ.get("CAPTURE_TIMEOUT_SECONDS",
-# "30") — so an empty or non-numeric value is a ValueError at import, i.e. a
-# silent no-capture, rather than a fallback. Reject junk here and log it.
+# Export numeric settings only when they are positive integers: curate.py would
+# crash on int("") or int("2 minutes"), and 0 would time out or skip everything.
 _export_int_setting() {
     local name="$1" value
     value="${!name:-}"
     if [[ -z "$value" ]]; then
         return 0
     fi
-    if [[ "$value" =~ ^[0-9]+$ ]]; then
-        # ${name?} form: exports the variable *named by* $name (shellcheck SC2163
-        # flags the bare "$name" spelling even though it behaves identically).
+    if [[ "$value" =~ ^[1-9][0-9]*$ ]]; then
         export "${name?}"
     else
-        printf 'CAPTURE_BAD_SETTING\t%s\t%s=%s is not a whole number — using the default\n' \
+        printf 'CAPTURE_BAD_SETTING\t%s\t%s=%s is not a positive whole number — using the default\n' \
             "$NOW" "$name" "$value" >> "$HOOKS_LOG"
         unset "$name"
     fi
@@ -83,8 +71,6 @@ _export_int_setting CAPTURE_TIMEOUT_SECONDS
 : "${CAPTURE_MAX_EST_TOKENS:=${CLAUDE_PLUGIN_OPTION_MAX_EST_TOKENS:-}}"
 _export_int_setting CAPTURE_MAX_EST_TOKENS
 
-# Free-form string: an empty value is harmless here (curate.py splits on "," and
-# drops empties), so it needs no validation — just the mapping.
 : "${CAPTURE_EXCLUDED_COMMANDS:=${CLAUDE_PLUGIN_OPTION_EXCLUDED_COMMANDS:-}}"
 export CAPTURE_EXCLUDED_COMMANDS
 
@@ -105,9 +91,7 @@ TRANSCRIPT_PATH=$(echo "$HOOK_JSON" | python3 -c "import json,sys; d=json.load(s
 SESSION_ID=$(echo "$HOOK_JSON" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('session_id',''))" 2>/dev/null || true)
 CWD=$(echo "$HOOK_JSON" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('cwd',''))" 2>/dev/null || true)
 
-# Guard: if we couldn't parse the fields, log why and bail. This also covers a
-# missing python3 (the three extractions above all fail silently), which would
-# otherwise be indistinguishable from "the hook never fired" in hooks.log.
+# Guard: if we couldn't parse the fields (or python3 is missing), log why and bail.
 if [[ -z "$SESSION_ID" || -z "$TRANSCRIPT_PATH" ]]; then
     if command -v python3 >/dev/null 2>&1; then
         printf 'CAPTURE_HOOK_JSON_UNPARSED\t%s\tno session_id/transcript_path in hook JSON\n' \
@@ -137,9 +121,8 @@ if [[ "${CAPTURE_USE_SUBSCRIPTION:-}" == "1" ]]; then
     # supplied via the sensitive oauth_token plugin config field).
     : "${CLAUDE_CODE_OAUTH_TOKEN:=${CLAUDE_PLUGIN_OPTION_OAUTH_TOKEN:-}}"
     if [[ -z "${CLAUDE_CODE_OAUTH_TOKEN:-}" && -f "$HOME/.claude_vault_oauth_token" ]]; then
-        # shellcheck disable=SC2155  # export masks the helper's exit code on purpose —
-        # a token-read failure (including bad perms) must not abort this close-path
-        # hook under `set -e`; it just leaves the token empty.
+        # shellcheck disable=SC2155  # masking the exit code is deliberate: a failed
+        # read (e.g. bad perms) must leave the token empty, not abort under set -e.
         export CLAUDE_CODE_OAUTH_TOKEN="$(_read_secret_file "$HOME/.claude_vault_oauth_token")"
     fi
     export CLAUDE_CODE_OAUTH_TOKEN
@@ -155,27 +138,16 @@ fi
 # Ground-truth marker BEFORE backgrounding (pre-log crash gap detection)
 printf 'SESSION_END_RECEIVED\t%s\t%s\n' "$SESSION_ID" "$NOW" >> "$HOOKS_LOG"
 
-# Deploy identity: the June–July timeout outage was a checkout stuck behind
-# origin/main, so the running code silently wasn't the merged code. Log which
-# version produced every capture so drift is visible in hooks.log. Exactly one
-# CAPTURE_DEPLOY line per session in either mode.
+# Log which code version handles each session, so a stale deploy shows in hooks.log.
 if [[ -n "${CLAUDE_PLUGIN_ROOT:-}" ]]; then
-    # Installed plugin: the plugin version is the authoritative identity, and
-    # git would be actively misleading — $REPO is rarely a git root, and `git -C`
-    # walks UP, so it would describe whatever repo encloses the plugin (the
-    # marketplace clone, or an unrelated repo someone vendored it into) and
-    # compare against THAT repo's origin/main, reporting false STALE_DEPLOYs.
-    # `|| true`: under `set -euo pipefail` a missing/unreadable plugin.json makes
-    # sed exit non-zero, and that would abort the hook — skipping the capture
-    # entirely over a cosmetic log line. ${...:-unknown} covers the empty result.
+    # Plugin: use the plugin version; `git -C` would describe the enclosing repo.
+    # `|| true` so a missing plugin.json can't abort the hook under pipefail.
     PLUGIN_VERSION="$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
         "$REPO/.claude-plugin/plugin.json" 2>/dev/null | head -1 || true)"
     printf 'CAPTURE_DEPLOY\tv%s\tplugin\t%s\n' "${PLUGIN_VERSION:-unknown}" \
         "$NOW" >> "$HOOKS_LOG"
 else
-    # Standalone/dev checkout: log the running SHA and flag when the last-fetched
-    # origin/main is not an ancestor of HEAD. Local-only git ops — never fetch on
-    # the close path.
+    # Standalone checkout: flag HEAD behind the last-fetched origin/main (no fetch).
     DEPLOY_SHA="$(git -C "$REPO" rev-parse --short HEAD 2>/dev/null || echo unknown)"
     DEPLOY_STATE="ok"
     if [[ "$DEPLOY_SHA" == "unknown" ]]; then
@@ -188,18 +160,13 @@ else
         "$NOW" >> "$HOOKS_LOG"
 fi
 
-# Choose the interpreter. A pre-built .venv (standalone/dev `uv sync`) wins, but
-# ONLY outside a plugin install: running `uv sync` inside an installed plugin (as
-# the README's own Tests section invites) leaves a .venv holding just the dev
-# group, which would then shadow the PEP 723 deps and silently break subscription
-# mode — that venv has no claude-agent-sdk, and `--with` is only passed on the uv
-# path. An installed plugin therefore always goes through `uv run`.
+# Choose the interpreter. A standalone .venv wins, but never inside a plugin
+# install: a dev `uv sync` venv there lacks claude-agent-sdk and would shadow uv run.
 if [[ -z "${CLAUDE_PLUGIN_ROOT:-}" && -x "$VENV_PYTHON" ]]; then
     RUN=("$VENV_PYTHON" "$CURATE")
 elif command -v uv >/dev/null 2>&1; then
-    # Build RUN incrementally: expanding an empty array via "${ARR[@]}" is an
-    # "unbound variable" error under `set -u` on bash < 4.4, and macOS ships 3.2 —
-    # a single interpolated array here killed every marketplace-install capture.
+    # Built incrementally: "${EMPTY[@]}" is an unbound-variable error under
+    # set -u on macOS's bash 3.2.
     RUN=(uv run --quiet)
     if [[ "${CAPTURE_USE_SUBSCRIPTION:-}" == "1" ]]; then
         RUN+=(--with "claude-agent-sdk==0.2.89")

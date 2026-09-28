@@ -6,12 +6,8 @@ import tempfile
 # Ensure hooks/ is always on the path for all test modules
 sys.path.insert(0, str(pathlib.Path(__file__).parent.parent / "hooks"))
 
-# Redirect scrub failure logging away from the real eval/state/scrub-failures.md
-# for the entire test session. scrub.py compiles its rules at import time and
-# logs any re.error to SCRUB_FAILURES_PATH (falling back to the real file when
-# unset), so tests that inject a malformed rule and reload the module would
-# otherwise pollute the live failures log. Set this at conftest import time so
-# it is in place before any test module imports scrub.
+# Keep scrub's malformed-rule logging off the real eval/state/scrub-failures.md;
+# set at import so it is in place before any test module imports scrub.
 _SESSION_FAILURES_PATH = str(
     pathlib.Path(tempfile.gettempdir()) / "cvc-test-scrub-failures.md"
 )
@@ -24,14 +20,7 @@ import yaml
 
 
 def parse_frontmatter(text: str) -> dict:
-    """Parse the frontmatter block with a real YAML parser.
-
-    A hand-rolled partition-on-colon parser once masked a bug where rendered
-    frontmatter was invalid YAML for any title containing ': ' — Obsidian
-    rejected what the tests accepted. Parsing with yaml.safe_load means the
-    suite fails exactly when Obsidian would. Values are coerced to str so
-    existing string-equality assertions keep working; dates render ISO.
-    """
+    """Parse frontmatter via yaml.safe_load so tests fail when Obsidian would."""
     assert text.startswith("---\n")
     block = text.split("---\n", 2)[1]
     data = yaml.safe_load(block)
@@ -60,12 +49,7 @@ def read_log(path) -> list[dict]:
 
 @pytest.fixture(autouse=True)
 def _isolate_scrub_failures_path():
-    """Re-establish the temp failures path before each test.
-
-    Individual tests may override SCRUB_FAILURES_PATH (e.g. to assert on a
-    tmp_path file) and some pop it in teardown; this guarantees the real
-    eval/state/scrub-failures.md is never the target between tests.
-    """
+    """Reset SCRUB_FAILURES_PATH before each test; some tests override or pop it."""
     os.environ["SCRUB_FAILURES_PATH"] = _SESSION_FAILURES_PATH
     yield
 
@@ -79,21 +63,9 @@ _MOCK_RESPONSES_PATH = (
 
 @pytest.fixture
 def mock_from_responses(monkeypatch):
-    """Factory: given a mock-responses.json key, monkeypatch the curation call.
+    """Factory: patch curate._call_path_a to replay mock-responses.json[name]["path_a"].
 
-    Loads eval/fixtures/mock-responses.json[name] and patches curate._call_path_a
-    to replay the recorded artifact (Path B was retired 2026-06-04, so only the
-    path_a entry is used):
-
-      - dict entry      → returned as-is (entries already carry tokens_in/out +
-                          cost_usd — they are NOT backfilled).
-      - null for path_a → returns None (run_capture maps to model_returned_null;
-                          a null has no usage data, so none is synthesized).
-
-    This is the fixture-driven sibling of the inline-mock pattern in
-    tests/test_failure_isolation.py. Use this when replaying the recorded
-    mock-responses.json artifacts; use the inline pattern when a test needs a
-    bespoke mock (e.g. a secret in the body, or exc.usage assertions).
+    A dict entry is returned as-is (usage included); null returns None.
     """
     import curate
 
@@ -118,21 +90,10 @@ def mock_from_responses(monkeypatch):
 
 @pytest.fixture(autouse=True)
 def temp_vault(tmp_path, monkeypatch):
-    """Isolated vault layout + curate state paths for every test.
+    """Isolated vault + state paths (.vault_dir/.log_path/.index_path) for every test.
 
-    Path defaults in curate.py resolve module globals at call time, so patching
-    them here catches any call site that doesn't thread an explicit path — the
-    transcript_missing logging in main() wrote 6 rows into the live W30
-    eval/state/log.md exactly that way (session id gone00112233aabb0012).
-
-    The globals are pointed at a default-state subtree DISTINCT from the
-    returned explicit paths: a call site that silently drops an explicit path
-    writes where no test assertion will accidentally find it, so the drop
-    fails loudly instead of passing by coincidence. run_main re-points the
-    globals at the explicit paths, because main() threads no path arguments
-    and legitimately resolves the defaults.
-
-    Returns .vault_dir/.log_path/.index_path for tests that assert on state.
+    curate's path globals point at a separate default-state dir, so a call site
+    that drops an explicit path writes where no assertion looks and fails loudly.
     """
     import curate
 
@@ -151,11 +112,7 @@ def temp_vault(tmp_path, monkeypatch):
 
 @pytest.fixture
 def run_main(monkeypatch, temp_vault):
-    """Invoke curate.main() against the temp vault, returning the parsed log entries.
-
-    main() threads no path arguments — every write resolves the module
-    globals — so point them at the temp_vault paths the tests assert on.
-    """
+    """Run curate.main() against temp_vault (main() only uses the path globals)."""
     import curate
 
     monkeypatch.setattr(curate, "LOG_PATH", temp_vault.log_path)

@@ -1,8 +1,5 @@
-"""Path A retry-on-null: the same transcript can null then yield an artifact.
-
-These exercise the real curate._call_path_a (not the wholesale mock used by the
-e2e suite) by monkeypatching the transport _invoke_model, so the retry loop and
-its token accounting are covered directly.
+"""Path A resampling: _call_path_a retries a null or malformed reply once and sums
+token usage across attempts. Only the transport _invoke_model is faked.
 """
 
 import json
@@ -64,10 +61,6 @@ def test_artifact_on_first_call_does_not_retry(monkeypatch):
 
 
 def test_malformed_json_is_retried_once_then_raises(monkeypatch):
-    """Prose-instead-of-JSON is a non-deterministic generation failure, so it
-    gets the same single retry a null gets. Before 2026-07-28 it raised on the
-    first failure; 20 of 259 replies had been lost that way, several of which
-    a re-sample would plausibly have recovered."""
     fake, calls = _seq(("not json", 100, 3), ("also not json", 90, 2))
     monkeypatch.setattr(curate, "_invoke_model", fake)
 
@@ -79,8 +72,6 @@ def test_malformed_json_is_retried_once_then_raises(monkeypatch):
 
 
 def test_malformed_then_artifact_recovers(monkeypatch):
-    """The point of the retry: a reply that continued the conversation on the
-    first sample can come back as a clean artifact on the second."""
     artifact = json.dumps({"title": "T", "type": "gotcha", "body": "B"})
     fake, calls = _seq(("Sure — here's what I'd do next…", 100, 3), (artifact, 120, 40))
     monkeypatch.setattr(curate, "_invoke_model", fake)
@@ -93,9 +84,6 @@ def test_malformed_then_artifact_recovers(monkeypatch):
 
 
 def test_malformed_then_null_is_logged_as_malformed_not_null(monkeypatch):
-    """A trailing null must not erase an unparseable reply from log.md: the
-    malformed_json rate is the instrument this failure class is tracked by, and
-    the resample budget is shared between the two classes."""
     fake, calls = _seq(("continuing the conversation…", 100, 3), ("null", 90, 2))
     monkeypatch.setattr(curate, "_invoke_model", fake)
 
@@ -107,7 +95,6 @@ def test_malformed_then_null_is_logged_as_malformed_not_null(monkeypatch):
 
 
 def test_null_then_artifact_still_recovers_after_the_shared_budget_rename(monkeypatch):
-    """The null contract is unchanged by sharing the budget with malformed."""
     artifact = json.dumps({"title": "T", "type": "gotcha", "body": "B"})
     fake, calls = _seq(("null", 100, 3), (artifact, 120, 40))
     monkeypatch.setattr(curate, "_invoke_model", fake)
@@ -125,11 +112,7 @@ def test_null_then_artifact_still_recovers_after_the_shared_budget_rename(monkey
     ids=["quoted-null-string", "list", "number"],
 )
 def test_valid_but_non_object_json_is_malformed_with_usage(monkeypatch, raw):
-    """Valid JSON of the wrong type parses fine, so it never reaches the
-    JSONDecodeError branch — it once fell through to data.update() and died as
-    an AttributeError, losing the token accounting with it. It now takes the
-    same route as an unparseable reply: salvage, one resample, then
-    malformed_json with both attempts billed."""
+    """Wrong-type JSON takes the malformed route: salvage, one resample, then raise."""
     fake, calls = _seq((raw, 100, 3), (raw, 90, 2))
     monkeypatch.setattr(curate, "_invoke_model", fake)
 
@@ -142,7 +125,6 @@ def test_valid_but_non_object_json_is_malformed_with_usage(monkeypatch, raw):
 
 
 def test_non_object_then_artifact_recovers(monkeypatch):
-    """The wrong-type reply gets the same second chance an unparseable one does."""
     artifact = json.dumps({"title": "T", "type": "spec", "body": "B"})
     fake, calls = _seq(("[1, 2]", 100, 3), (artifact, 120, 40))
     monkeypatch.setattr(curate, "_invoke_model", fake)

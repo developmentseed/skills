@@ -11,13 +11,8 @@ from curate import derive_project, is_above_token_limit, CAPTURE_MAX_EST_TOKENS
 class TestProjectDerivation:
     @pytest.fixture(autouse=True)
     def _scrub_git_env(self, monkeypatch):
-        """Drop git's exported repo env so subprocess git calls see only cwd.
-
-        When pytest itself runs inside a git hook (the pre-push hook does
-        this), git exports GIT_DIR et al.; derive_project's `git rev-parse`
-        then resolves against the exporting repo instead of the tmp_path repo
-        these tests create, e.g. reporting `subdir` as the toplevel.
-        """
+        """Under a git hook (pre-push runs pytest) GIT_DIR et al. would point
+        derive_project's `git rev-parse` at the outer repo, not tmp_path."""
         for var in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR"):
             monkeypatch.delenv(var, raising=False)
 
@@ -42,9 +37,7 @@ class TestProjectDerivation:
 class TestTokenCeiling:
     @pytest.fixture(autouse=True)
     def _clear_env_override(self, monkeypatch):
-        """These tests size inputs from the imported literal default; an
-        exported CAPTURE_MAX_EST_TOKENS (e.g. sourced from capture.env) would
-        change the call-time limit out from under them."""
+        """Inputs are sized from the default; an exported override would break them."""
         monkeypatch.delenv("CAPTURE_MAX_EST_TOKENS", raising=False)
 
     def test_above_limit_returns_true(self):

@@ -1,15 +1,5 @@
-"""Subprocess tests for the marketplace-plugin mode of session-end-capture.sh.
-
-test_session_end_hook.py covers the standalone/dev layout (capture.env + a
-pre-built .venv). These tests cover the other half — what an installed plugin
-actually gets: no .venv, config via CLAUDE_PLUGIN_OPTION_* env vars, state under
-CLAUDE_PLUGIN_DATA, and the worker launched through `uv run`. A stub `uv` on
-PATH records its argv and environment, so nothing real ever runs.
-
-Every run uses /bin/bash explicitly: on macOS that is bash 3.2, where expanding
-an empty array under `set -u` is a fatal "unbound variable" error — the exact
-bug that once broke every marketplace capture. Keep it /bin/bash so the suite
-guards the oldest bash this hook must support.
+"""Plugin-mode tests for session-end-capture.sh: no .venv, CLAUDE_PLUGIN_* config,
+and the worker launched through a stub `uv` that records its argv and env.
 """
 
 import json
@@ -19,16 +9,16 @@ import shutil
 import subprocess
 import time
 
+import pytest
+
 
 HOOK = pathlib.Path(__file__).parent.parent / "hooks" / "session-end-capture.sh"
 
 
 def _build_plugin(home: pathlib.Path) -> pathlib.Path:
-    """Lay out a plugin-style install (no .venv, no capture.env) plus a stub uv.
+    """Lay out a plugin install plus a stub uv; return the stub's record path.
 
-    Returns the invocation-record path the stub uv writes to. The hook
-    self-locates via ${BASH_SOURCE[0]}, so a copy of the real hook is placed
-    inside the fake plugin root.
+    The hook self-locates via ${BASH_SOURCE[0]}, so a copy goes in the fake root.
     """
     plugin = home / "plugin-root"
     (plugin / "hooks").mkdir(parents=True)
@@ -43,12 +33,8 @@ def _build_plugin(home: pathlib.Path) -> pathlib.Path:
     bindir = home / "bin"
     bindir.mkdir()
     stub = bindir / "uv"
-    # Writes to a temp file and renames as its LAST action: rename is atomic on
-    # the same filesystem, so _wait_for seeing the path implies the whole record
-    # is there. Polling the final path directly raced the 9 separate printfs and
-    # could read a half-written file.
-    # The timeout probe distinguishes unset from set-and-empty (${x:-} would
-    # collapse them, and "unset vs empty" is exactly what one test asserts).
+    # Write to a temp file and rename last (atomic), so _wait_for never reads a
+    # half-written record. ${x+x} probes keep unset distinct from set-but-empty.
     stub.write_text(
         "#!/usr/bin/env bash\n"
         f'INV="{invocation}"\n'
@@ -78,8 +64,10 @@ def _build_plugin(home: pathlib.Path) -> pathlib.Path:
     return invocation
 
 
-def _run_hook(home: pathlib.Path, extra_env: dict | None = None, payload: dict | None = None):
-    """Run the hook copy under /bin/bash with the stub-uv dir first on PATH."""
+def _run_hook(
+    home: pathlib.Path, extra_env: dict | None = None, payload: dict | None = None
+):
+    """Run under /bin/bash: macOS bash 3.2 dies on empty arrays under `set -u`."""
     if payload is None:
         payload = {
             "session_id": "plugin-sess-1",
@@ -119,7 +107,7 @@ def _wait_for(path: pathlib.Path, timeout: float = 3.0) -> bool:
 
 class TestUvRunBranch:
     def test_no_venv_launches_uv_run_under_system_bash(self, tmp_path):
-        """Regression: empty-array expansion killed this branch on bash 3.2."""
+        """Empty-array expansion must not abort this branch on bash 3.2."""
         home = tmp_path / "home"
         home.mkdir()
         invocation = _build_plugin(home)
@@ -131,7 +119,9 @@ class TestUvRunBranch:
         assert _wait_for(invocation), "stub uv never ran — worker was not launched"
         argv = invocation.read_text().splitlines()[0]
         assert argv.startswith("ARGV:run --quiet")
-        assert "/hooks/curate.py /tmp/transcript.jsonl plugin-sess-1 /tmp/project" in argv
+        assert (
+            "/hooks/curate.py /tmp/transcript.jsonl plugin-sess-1 /tmp/project" in argv
+        )
         assert "--with" not in argv, "non-subscription mode must not pull the SDK"
 
     def test_subscription_mode_adds_sdk_with_flag(self, tmp_path):
@@ -139,9 +129,7 @@ class TestUvRunBranch:
         home.mkdir()
         invocation = _build_plugin(home)
 
-        proc = _run_hook(
-            home, extra_env={"CLAUDE_PLUGIN_OPTION_USE_SUBSCRIPTION": "1"}
-        )
+        proc = _run_hook(home, extra_env={"CLAUDE_PLUGIN_OPTION_USE_SUBSCRIPTION": "1"})
 
         assert proc.returncode == 0, proc.stderr
         assert _wait_for(invocation)
@@ -178,7 +166,6 @@ class TestPluginConfigMapping:
         assert f"SCRUB_FAILURES_PATH={state / 'scrub-failures.md'}" in record
 
     def test_explicit_env_wins_over_plugin_option(self, tmp_path):
-        """A real CAPTURE_VAULT_DIR env var must not be clobbered by plugin config."""
         home = tmp_path / "home"
         home.mkdir()
         invocation = _build_plugin(home)
@@ -191,23 +178,22 @@ class TestPluginConfigMapping:
 
 
 class TestTimeoutOption:
-    """CAPTURE_TIMEOUT_SECONDS is the headline ported feature; plugin users can
-    only reach it through userConfig, and curate.py reads it with a *string*
-    default, so an empty or junk value would be a ValueError at import."""
+    """curate.py int()s this at import, so an empty or junk export would crash it."""
 
     def test_option_maps_to_env(self, tmp_path):
         home = tmp_path / "home"
         home.mkdir()
         invocation = _build_plugin(home)
 
-        proc = _run_hook(home, extra_env={"CLAUDE_PLUGIN_OPTION_TIMEOUT_SECONDS": "120"})
+        proc = _run_hook(
+            home, extra_env={"CLAUDE_PLUGIN_OPTION_TIMEOUT_SECONDS": "120"}
+        )
 
         assert proc.returncode == 0, proc.stderr
         assert _wait_for(invocation)
         assert "CAPTURE_TIMEOUT_SECONDS=SET[120]" in invocation.read_text()
 
     def test_unset_option_leaves_env_unset_not_empty(self, tmp_path):
-        """An empty export would make int("") raise inside curate.py."""
         home = tmp_path / "home"
         home.mkdir()
         invocation = _build_plugin(home)
@@ -218,13 +204,14 @@ class TestTimeoutOption:
         assert _wait_for(invocation)
         assert "CAPTURE_TIMEOUT_SECONDS=UNSET" in invocation.read_text()
 
-    def test_non_numeric_option_is_rejected_and_logged(self, tmp_path):
+    @pytest.mark.parametrize("value", ["2 minutes", "0"])
+    def test_invalid_option_is_rejected_and_logged(self, tmp_path, value):
         home = tmp_path / "home"
         home.mkdir()
         invocation = _build_plugin(home)
 
         proc = _run_hook(
-            home, extra_env={"CLAUDE_PLUGIN_OPTION_TIMEOUT_SECONDS": "2 minutes"}
+            home, extra_env={"CLAUDE_PLUGIN_OPTION_TIMEOUT_SECONDS": value}
         )
 
         assert proc.returncode == 0, proc.stderr
@@ -234,10 +221,7 @@ class TestTimeoutOption:
 
 
 class TestMigratedSettings:
-    """Settings a standalone capture.env commonly carries. Without a userConfig
-    entry each of these is silently lost when moving to the plugin: excluded
-    commands start getting captured, and a raised token ceiling drops back to
-    50000 so long sessions begin skipping."""
+    """capture.env settings that need a userConfig mapping to survive in plugin mode."""
 
     def test_excluded_commands_maps_through(self, tmp_path):
         home = tmp_path / "home"
@@ -288,8 +272,7 @@ class TestMigratedSettings:
 
 class TestDeployIdentity:
     def test_plugin_mode_logs_version_not_git_sha(self, tmp_path):
-        """git would describe whatever repo encloses the plugin dir, so plugin
-        installs log the plugin version instead — but still exactly one line."""
+        """git would describe the enclosing repo, so log the plugin version instead."""
         home = tmp_path / "home"
         home.mkdir()
         _build_plugin(home)

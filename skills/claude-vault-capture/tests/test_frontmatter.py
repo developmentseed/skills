@@ -156,14 +156,19 @@ class TestRenderFrontmatter:
 
 
 class TestYamlRoundTrip:
-    """Rendered frontmatter must survive a real YAML parser — the contract
-    Obsidian holds us to. A partition-on-colon test parser once masked that
-    the house-style 'Decision: …' titles produced unparseable frontmatter.
-    """
+    """Rendered frontmatter must parse with a real YAML parser, as Obsidian requires."""
 
     EXPECTED_KEYS = {
-        "title", "type", "project", "tags", "source",
-        "session_id", "created", "model", "cost_usd", "redactions",
+        "title",
+        "type",
+        "project",
+        "tags",
+        "source",
+        "session_id",
+        "created",
+        "model",
+        "cost_usd",
+        "redactions",
     }
 
     @staticmethod
@@ -194,14 +199,11 @@ class TestYamlRoundTrip:
         assert data["title"] == "Decision: Use PostgreSQL with PgBouncer"
 
     def test_quotes_hash_unicode_in_title(self):
-        data = self._parse(
-            self._render(title='Runbook: rotate "prod" keys — étape 1')
-        )
+        data = self._parse(self._render(title='Runbook: rotate "prod" keys — étape 1'))
         assert data["title"].startswith("Runbook: rotate")
 
     def test_hostile_tag_cannot_inject_keys(self):
-        # render must be inert even for raw strings (defense in depth beneath
-        # the sanitize_tag layer applied by run_capture)
+        # Raw strings on purpose: render must be inert even without sanitize_tag.
         data = self._parse(
             self._render(tags=["ok", "x\nsource: attacker", "a]b", "c: d"])
         )
@@ -210,9 +212,7 @@ class TestYamlRoundTrip:
         assert "x\nsource: attacker" in data["tags"]
 
     def test_hostile_type_and_project_cannot_break_block(self):
-        data = self._parse(
-            self._render(fm_type="x\n---\nevil: 1", project="proj: {a}")
-        )
+        data = self._parse(self._render(fm_type="x\n---\nevil: 1", project="proj: {a}"))
         assert set(data.keys()) == self.EXPECTED_KEYS
         assert "evil" not in data
 

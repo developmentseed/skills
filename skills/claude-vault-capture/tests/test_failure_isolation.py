@@ -1,9 +1,5 @@
-"""Unit tests for Path A failure handling and token capture on error paths.
-
-Single-path capture (Path B retired 2026-06-04): a Path A failure must be
-caught, leave no file written, and log the skip_reason. Token/cost data must be
-preserved even when JSON parsing fails or the model returns null.
-Uses CAPTURE_MOCK_SDK=1 with a mock entry that raises.
+"""Path A failure handling: no file written, skip_reason logged, and token/cost
+usage preserved when JSON parsing fails or the model returns null.
 """
 
 import json
@@ -44,7 +40,6 @@ def _run_with_mock_a(tmp_path, monkeypatch, mock_a, sid="test-session"):
 
 class TestFailureHandling:
     def test_path_a_error_writes_no_file_and_logs(self, tmp_path, monkeypatch):
-        """When Path A raises, no artifact is written and the error is logged."""
         entry, inbox_auto = _run_with_mock_a(
             tmp_path,
             monkeypatch,
@@ -56,7 +51,6 @@ class TestFailureHandling:
         assert entry["skip_reason_a"].startswith("error:")
 
     def test_path_a_success_writes_file(self, tmp_path, monkeypatch):
-        """When Path A returns an artifact, it is written and logged clean."""
         entry, inbox_auto = _run_with_mock_a(
             tmp_path,
             monkeypatch,
@@ -78,10 +72,7 @@ class TestFailureHandling:
 
 
 class TestTokenCaptureOnFailure:
-    """Tokens and cost must be logged even when JSON parsing fails or model returns null."""
-
     def test_model_returned_null_preserves_tokens(self, tmp_path, monkeypatch):
-        """Path A returning null should still log token usage."""
         entry, _ = _run_with_mock_a(
             tmp_path,
             monkeypatch,
@@ -99,8 +90,6 @@ class TestTokenCaptureOnFailure:
         assert entry["cost_usd_a"] == 0.0036
 
     def test_malformed_json_preserves_tokens(self, tmp_path, monkeypatch):
-        """Path A malformed_json should still log token usage via exc.usage."""
-
         def mock_a_malformed(*a, **kw):
             exc = json.JSONDecodeError("bad", "", 0)
             exc.usage = {"tokens_in": 800, "tokens_out": 60, "cost_usd": 0.0003}
@@ -115,8 +104,7 @@ class TestTokenCaptureOnFailure:
         assert entry["cost_usd_a"] == 0.0003
 
     def test_generic_error_logs_exception_message(self, tmp_path, monkeypatch):
-        """error:<Type> skips must also log the exception *message* — a bare type
-        name (e.g. the SDK's literal `Exception`) is undiagnosable from log.md."""
+        """A bare type name (e.g. the SDK's literal `Exception`) is undiagnosable."""
         import curate
 
         recorded = []
@@ -132,8 +120,6 @@ class TestTokenCaptureOnFailure:
         assert any("Control request timeout: initialize" in m for m in recorded)
 
     def test_malformed_json_without_usage_attr(self, tmp_path, monkeypatch):
-        """Graceful fallback when exc.usage is absent."""
-
         def mock_a_plain_error(*a, **kw):
             raise json.JSONDecodeError("bad", "", 0)
 

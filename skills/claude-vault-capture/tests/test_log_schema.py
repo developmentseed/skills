@@ -1,8 +1,4 @@
-"""Unit tests — each skip_reason variant produces a schema-valid JSON line.
-
-Single-path schema (v2): Path B was retired 2026-06-04, so every entry has
-exactly one path_a/skip_reason_a pair.
-"""
+"""Unit tests — each skip_reason variant produces a schema-valid (v2) JSON line."""
 
 import json
 
@@ -129,7 +125,6 @@ class TestLogSchema:
         assert e["skip_reason_a"] == "duplicate"
 
     def test_invariant_never_both_null(self):
-        """path_a and skip_reason_a cannot be null simultaneously."""
         e = build_log_entry(
             session_id="s1",
             path_a=None,

@@ -1,10 +1,5 @@
-"""Tests for render_transcript — the enriched curator input builder.
-
-render_transcript turns the loaded message list (each carrying raw content
-`blocks`) into the text the curation model sees. Unlike the filters, which read
-only the text-only `content`, this renderer surfaces tool activity: commands run
-([TOOL]), command output heads ([OUT]), and failures ([ERROR]). A char budget
-caps tool volume so the enriched input never blows the token guard.
+"""Tests for render_transcript: curator input with tool calls ([TOOL]), output heads
+([OUT]) and failures ([ERROR]) from raw `blocks`, under a char budget.
 """
 
 import curate
@@ -68,6 +63,19 @@ class TestToolUse:
         assert "[TOOL] Read" in out
         assert "a.py" in out
 
+    def test_multiedit_shows_its_edits(self):
+        edit = {"old_string": "alpha", "new_string": "beta"}
+        blocks = [
+            {
+                "type": "tool_use",
+                "name": "MultiEdit",
+                "input": {"file_path": "a.py", "edits": [edit]},
+            }
+        ]
+        out = render_transcript([_msg("assistant", "", blocks)])
+        assert "a.py" in out
+        assert "alpha" in out and "beta" in out
+
 
 class TestToolResults:
     def test_error_results_are_kept_in_full(self):
@@ -109,8 +117,6 @@ class TestToolResults:
         assert "boom failed" in out
 
     def test_image_only_result_emits_no_out_line(self):
-        # A screenshot/image tool_result has no text content — it must not
-        # inject a blank "[OUT] " marker line into the prompt.
         blocks = [
             {
                 "type": "tool_result",
@@ -128,8 +134,7 @@ class TestToolResults:
 
 class TestBudget:
     def test_budget_stops_tool_use_but_keeps_text_and_errors(self, monkeypatch):
-        # Tiny budget: only the first tool line fits; later tool_use is dropped,
-        # but assistant text and error results survive regardless.
+        # Tiny budget: only the first tool line fits.
         monkeypatch.setenv("CAPTURE_TOOL_CHARS_BUDGET", "30")
         blocks = [
             {"type": "text", "text": "narration stays"},
@@ -210,34 +215,44 @@ class TestReachesCuratorScrubbed:
         assert "[TOOL] Bash:" in text  # command surfaced
         assert "[ERROR] Exit code 1: boom" in text  # failure surfaced
         assert "ghp_abc123DEADBEEF" not in text  # secret scrubbed
-        # Any sentinel: `export TOKEN=ghp_…` is claimed by token_prefix first and
-        # then re-covered by env_var (rules apply in order and the later one
-        # rewrites the whole value), so pinning one label tests rule ordering
-        # rather than the property that matters — that nothing leaks.
+        # Any label: token_prefix and env_var both match here, and which one wins
+        # is rule ordering, not the no-leak property under test.
         assert "<redacted:" in text
 
 
 class TestSecretsSurviveTruncation:
-    """Tool blocks are capped (_BASH_CMD_CAP, _ERROR_CAP, CAPTURE_SUCCESS_HEAD_CHARS).
-    Capping BEFORE scrubbing defeated the scrubber outright: private_key needs its
-    -----END----- terminator and AIza…/AKIA… need their full body, so a cut secret
-    matched nothing and reached the model and the note in clear.
-    """
+    """Tool blocks are capped; scrub first, since a cut secret matches no rule."""
 
-    PEM = (
-        "-----BEGIN OPENSSH PRIVATE KEY-----\n"
-        + ("b3BlbnNzaC1rZXktdjEAAAAA" * 40)
-        + "\n-----END OPENSSH PRIVATE KEY-----"
-    )
+    # Markers assembled at runtime: secret scanners flag BEGIN/END lines at rest.
+    MARKER = "-----{} OPENSSH PRIVATE KEY-----"
+    PEM = f"{MARKER.format('BEGIN')}\n{'b3BlbnNzaC1rZXktdjEAAAAA' * 40}\n{MARKER.format('END')}"
 
     def _blocks_for(self, kind):
         if kind == "error":
-            return [{"type": "tool_result", "is_error": True, "content": "auth failed " + self.PEM}]
+            return [
+                {
+                    "type": "tool_result",
+                    "is_error": True,
+                    "content": "auth failed " + self.PEM,
+                }
+            ]
         if kind == "out":
             return [{"type": "tool_result", "content": "cat id_ed25519\n" + self.PEM}]
         if kind == "bash":
-            return [{"type": "tool_use", "name": "Bash", "input": {"command": "echo '" + self.PEM + "'"}}]
-        return [{"type": "tool_use", "name": "Write", "input": {"file_path": "/k", "content": self.PEM}}]
+            return [
+                {
+                    "type": "tool_use",
+                    "name": "Bash",
+                    "input": {"command": "echo '" + self.PEM + "'"},
+                }
+            ]
+        return [
+            {
+                "type": "tool_use",
+                "name": "Write",
+                "input": {"file_path": "/k", "content": self.PEM},
+            }
+        ]
 
     @pytest.mark.parametrize("kind", ["error", "out", "bash", "write"])
     def test_pem_never_survives_a_capped_block(self, kind):

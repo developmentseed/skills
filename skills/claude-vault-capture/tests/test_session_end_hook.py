@@ -1,13 +1,5 @@
-"""Subprocess tests for hooks/session-end-capture.sh.
-
-Hermetic: a temp HOME holds a stub curate.py and an executable python3 shim that
-the hook backgrounds. The shim records its argv and a fixed whitelist of env vars
-to an invocation file, so we can assert what the hook passed without ever running
-the real worker or touching a real credential.
-
-Security: the shim records only CLAUDE_CODE_OAUTH_TOKEN / ANTHROPIC_API_KEY /
-CAPTURE_USE_SUBSCRIPTION, and every token file written here holds a DUMMY value,
-so no ambient real key is ever persisted. temp HOME is cleaned up by tmp_path.
+"""Subprocess tests for session-end-capture.sh (standalone layout). A python3 shim
+in a temp HOME records argv and a whitelist of env vars; token files hold DUMMY values.
 """
 
 import json
@@ -22,13 +14,9 @@ HOOK = pathlib.Path(__file__).parent.parent / "hooks" / "session-end-capture.sh"
 
 
 def _build_home(home: pathlib.Path, *, configure_vault: bool = True) -> pathlib.Path:
-    """Lay out a fake repo + temp HOME for the hook; return the invocation-record path.
+    """Lay out a fake repo + temp HOME; return the shim's invocation-record path.
 
-    The hook self-locates via ${BASH_SOURCE[0]}, so the test runs a *copy* of the
-    real hook placed inside the temp repo. That makes CURATE / VENV_PYTHON resolve
-    to the stub curate.py and python3 shim laid down here. A capture.env supplying
-    CAPTURE_VAULT_DIR is written by default so the hook's config guard passes;
-    configure_vault=False exercises the unconfigured path.
+    The hook self-locates via ${BASH_SOURCE[0]}, so a copy runs inside the repo.
     """
     repo = home / "DevDS" / "claude-vault-capture"
     (repo / "hooks").mkdir(parents=True)
@@ -41,8 +29,6 @@ def _build_home(home: pathlib.Path, *, configure_vault: bool = True) -> pathlib.
 
     invocation = home / "curate-invocation.txt"
     shim = repo / ".venv" / "bin" / "python3"
-    # The shim stands in for the venv interpreter. It records argv + a fixed
-    # whitelist of env vars, then exits 0. Invocation path is baked in here.
     shim.write_text(
         "#!/usr/bin/env bash\n"
         f'INV="{invocation}"\n'
@@ -204,9 +190,7 @@ class TestCredentialFallback:
 
 
 class TestDeployGuard:
-    """The June/July outage was a checkout stuck behind origin/main — the hook
-    now logs the running SHA per session and flags a stale deploy, so drift is
-    visible in hooks.log instead of silent."""
+    """The hook logs its running SHA and flags a deploy behind origin/main."""
 
     def _payload(self, sid="sess-deploy"):
         return json.dumps(
@@ -255,8 +239,7 @@ class TestDeployGuard:
         _build_home(home)
         repo = home / "DevDS" / "claude-vault-capture"
 
-        # Two commits; origin/main at the newer one, HEAD detached on the older
-        # → HEAD is missing commits from origin/main → stale.
+        # origin/main at c2, HEAD detached at c1 → stale.
         self._git(repo, "init", "-q")
         self._git(repo, "add", "-A")
         self._git(repo, "commit", "-qm", "c1")

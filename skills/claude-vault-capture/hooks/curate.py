@@ -3,20 +3,14 @@
 # requires-python = ">=3.11"
 # dependencies = ["anthropic==0.105.2"]
 # ///
-# PEP 723 inline metadata: when this plugin is installed via the Claude Code
-# marketplace there is no pre-built virtualenv, so the SessionEnd hook launches
-# this worker with `uv run`, which builds (and caches) the environment above on
-# first use. Standalone/dev checkouts that ran `uv sync` use `.venv` instead and
-# ignore this block. Subscription mode adds `claude-agent-sdk` via `uv run --with`.
-"""curate.py — sessionEnd hook worker.
+# PEP 723 deps: installed plugins have no .venv, so the hook runs this via `uv run`.
+"""curate.py — SessionEnd hook worker.
 
 Usage: curate.py <transcript_path> <session_id> <cwd>
 
-Runs the curation path (Path A, sonnet) — extracts a durable artifact or null,
-resampling once on a non-deterministic null or an unparseable reply — writes it
-to the Obsidian Inbox, and appends to the eval state log. (The *_a naming
-survives from a retired A/B experiment — Path B, a Haiku raw baseline, lost and
-was removed upstream 2026-06-04 — and is kept for log-schema compatibility.)
+Curates one durable artifact (or null) from a session transcript, writes it to
+the vault's Inbox/auto/, and appends a row to the state log. The *_a field names
+are kept from a retired A/B experiment for log-schema compatibility.
 
 All errors go to stderr / ~/.claude/hooks.log — never to the user's terminal.
 """
@@ -34,37 +28,23 @@ import subprocess
 
 # ── constants ──────────────────────────────────────────────────────────────────
 
-# Default token ceiling; the env var of the same name overrides it at call time
-# (see is_above_token_limit), so this constant is the single home of the literal.
+# Default token ceiling; CAPTURE_MAX_EST_TOKENS overrides it at call time.
 CAPTURE_MAX_EST_TOKENS: int = 50000
 
-# Slash commands whose sessions are NOT captured. Empty by default — the public
-# pipeline archives everything. Set CAPTURE_EXCLUDED_COMMANDS (env var or
-# capture.env) to skip capturing specific workflows' sessions.
+# Slash commands whose sessions are not captured (empty by default).
 EXCLUDED_COMMANDS: list[str] = [
     c.strip()
     for c in os.environ.get("CAPTURE_EXCLUDED_COMMANDS", "").split(",")
     if c.strip()
 ]
 
-# Repo root is derived from this file's location, so the checkout can live anywhere.
 REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
-# Runtime state (dedup index + per-session log) lives under eval/state by default.
-# As an installed plugin there is no writable repo dir, so session-end-capture.sh
-# sets CAPTURE_STATE_DIR to the plugin's persistent data dir (${CLAUDE_PLUGIN_DATA}),
-# which survives plugin updates. Tests pass explicit log_path/index_path and are
-# unaffected by either default.
+# Plugin installs point this at ${CLAUDE_PLUGIN_DATA}/state (survives updates).
 STATE_DIR = pathlib.Path(
     os.environ.get("CAPTURE_STATE_DIR") or (REPO_ROOT / "eval" / "state")
 )
 
-# The vault location is user-specific — there is no universal default. It is set via
-# the CAPTURE_VAULT_DIR env var: plugin installs map it from the vault_dir plugin
-# config (CLAUDE_PLUGIN_OPTION_VAULT_DIR), standalone checkouts from a sourced
-# capture.env — both handled by session-end-capture.sh before launching this script.
-# The fallback below only applies when curate.py is run by hand without config;
-# the hook refuses to launch when the vault is unconfigured, so the real hook path
-# always provides an explicit value.
+# The hook refuses to launch without CAPTURE_VAULT_DIR; the fallback is for manual runs.
 VAULT_DIR = pathlib.Path(
     os.environ.get("CAPTURE_VAULT_DIR") or (pathlib.Path.home() / "Obsidian")
 )
@@ -73,21 +53,11 @@ INDEX_PATH = STATE_DIR / "session-index.tsv"
 HOOKS_LOG = pathlib.Path.home() / ".claude" / "hooks.log"
 
 MODEL_A = "claude-sonnet-5"
-# Raised from 2000 with the move to Sonnet 5: its tokenizer emits roughly 30%
-# more tokens for the same text, so an artifact that fit in 2000 output tokens
-# on Sonnet 4.6 can now truncate mid-JSON — which surfaces as malformed_json and
-# a lost capture, not an obvious error.
+# Sonnet 5's tokenizer emits ~30% more tokens than 4.6; 2000 truncated artifacts mid-JSON.
 MAX_TOKENS_A = 3000
-# Hard wall on a single model call. Overridable via CAPTURE_TIMEOUT_SECONDS for
-# environments with large sessions or slow links (e.g. subscription mode, where a
-# big transcript can take longer than the 30s default). All model work is
-# backgrounded off the SessionEnd close path, so a higher value never delays a session.
+# Hard wall on one model call (the whole call runs in the background).
 TIMEOUT_SECONDS: int = int(os.environ.get("CAPTURE_TIMEOUT_SECONDS", "30"))
-# Shared resample budget for BOTH non-deterministic reply failures: a `null` that
-# a second call would have answered with a real artifact, and an unparseable reply
-# (prose instead of JSON). One resample recovers those misses at zero precision
-# cost — a genuinely empty session re-nulls. Resample tokens are folded into the
-# usage totals so cost accounting stays accurate.
+# Replies are non-deterministic: a null or unusable reply gets this many retries.
 PATH_A_RESAMPLES = 1
 
 LOG_REQUIRED_KEYS = [
@@ -124,16 +94,19 @@ def sanitize_summary(s: str, max_len: int = 140) -> str:
     return s[:max_len]
 
 
-# Model-supplied frontmatter fields are hostile input (the transcript can carry
-# prompt injection): `type` is allowlisted, tags are collapsed to inert slugs.
+# Model output is untrusted (transcripts can carry prompt injection): `type` is
+# allowlisted and tags are reduced to inert slugs before reaching frontmatter.
 _ALLOWED_TYPES = {"decision", "runbook", "gotcha", "spec"}
 _TAG_BAD_RE = re.compile(r"[^a-z0-9-]+")
 
 
 def sanitize_type(fm_type) -> str:
     """Collapse anything off the artifact-type allowlist to 'decision'."""
-    # isinstance guard: an unhashable model value (list/dict) must not raise
-    return fm_type if isinstance(fm_type, str) and fm_type in _ALLOWED_TYPES else "decision"
+    return (
+        fm_type
+        if isinstance(fm_type, str) and fm_type in _ALLOWED_TYPES
+        else "decision"
+    )
 
 
 def sanitize_tag(tag) -> str:
@@ -159,45 +132,22 @@ def _strip_fences(text: str) -> str:
     return m.group(1).strip() if m else text
 
 
-# The artifact contract from prompts/curation-system-prompt.md. Required on the
-# salvage path so a stray JSON-looking object in prose can't be written as an
-# artifact: a reply that continued the conversation once contained a fabricated
-# `[TOOL] Read: {"file_path": …}` line, which parsed as a dict and would have
-# been written to Inbox/ as an empty "untitled" note (the write path fills every
-# field with a default).
 _ARTIFACT_KEYS = frozenset({"title", "type", "body"})
 
 
 def _is_artifact(obj) -> bool:
-    """True when *obj* satisfies the artifact contract: the three keys, as strings.
-
-    Applied to the directly-parsed reply as well as to salvaged objects. The
-    write path substitutes defaults for missing fields but assumes strings for
-    the ones present, so a `body` that arrives as a dict or a `title` as a number
-    raises mid-write — after the model call is already paid for, and before
-    _append_index/append_log run, which loses the session with no log.md row at
-    all. Rejecting it here routes it through the normal resample-then-
-    malformed_json path, which is logged.
-    """
+    """True when *obj* has the contract keys, all strings (the write path assumes so)."""
     return isinstance(obj, dict) and all(
         isinstance(obj.get(k), str) for k in _ARTIFACT_KEYS
     )
 
 
 def _salvage_artifact(raw: str) -> dict | None:
-    """Extract the artifact object from a reply that isn't bare JSON.
+    """Return the last artifact-shaped JSON object embedded in prose, if any.
 
-    Scans every `{` offset with raw_decode and keeps the LAST object that is
-    artifact-shaped. Scanning beats a find('{')..rfind('}') window, which spans
-    the first brace to the last anywhere in the reply: prose ahead of the
-    artifact containing any `{` (a fabricated tool call, a code sample) moved
-    the window's start and destroyed an otherwise-valid artifact. Last-wins
-    because the artifact is the reply's conclusion — quoted examples come first.
-
-    Shape means the three contract keys present AND holding strings: the write
-    path substitutes defaults for missing fields but assumes strings for the
-    ones present, so a mined object with a null or numeric title would raise
-    mid-write. Salvage is a recovery path — it must not widen what reaches disk.
+    Scans every `{` with raw_decode: a first-to-last-brace window breaks when
+    prose before the artifact contains a brace. Last wins, since quoted
+    examples come before the answer.
     """
     decoder = json.JSONDecoder()
     found: dict | None = None
@@ -207,9 +157,6 @@ def _salvage_artifact(raw: str) -> dict | None:
         try:
             obj, _ = decoder.raw_decode(raw, idx)
         except (json.JSONDecodeError, RecursionError):
-            # Both mean "no artifact starts here" — deeply nested prose JSON can
-            # exhaust the stack, and letting that escape would drop the usage
-            # accounting the caller attaches on the way out.
             continue
         if _is_artifact(obj):
             found = obj
@@ -264,12 +211,10 @@ def render_frontmatter(
     cost_usd: float | None,
     redactions: dict[str, int],
 ) -> str:
-    """Render YAML frontmatter block. Title is sanitized inside here.
+    """Render the YAML frontmatter block. Title is sanitized inside here.
 
-    Every string scalar goes through json.dumps: a JSON string is valid YAML
-    and inert, so a title like "Decision: use X" (the house style) or any
-    residual ':'/'#'/quote in a model-supplied value cannot break parsing or
-    inject keys. Obsidian/pyyaml both read the quoted form identically.
+    String scalars are json.dumps-quoted: a JSON string is valid, inert YAML, so
+    "Decision: use X" titles or stray ':'/'#' in model output can't break it.
     """
     clean_title = sanitize_title(title)
 
@@ -277,7 +222,9 @@ def render_frontmatter(
         return json.dumps(str(v), ensure_ascii=False)
 
     tags_yaml = "[" + ", ".join(q(t) for t in tags) + "]"
-    redact_yaml = "{" + ", ".join(f"{q(k)}: {int(v)}" for k, v in redactions.items()) + "}"
+    redact_yaml = (
+        "{" + ", ".join(f"{q(k)}: {int(v)}" for k, v in redactions.items()) + "}"
+    )
     cost_str = f"{cost_usd:.4f}" if cost_usd is not None else "null"
     return (
         f"---\n"
@@ -304,8 +251,7 @@ def is_duplicate_session(
     index_path: pathlib.Path | None = None,
 ) -> bool:
     """Return True if session_id already appears in the index TSV."""
-    if index_path is None:
-        index_path = INDEX_PATH
+    index_path = index_path or INDEX_PATH
     if not index_path.exists():
         return False
     with open(index_path, encoding="utf-8") as fh:
@@ -337,12 +283,8 @@ def uses_excluded_command(
     Matches only when the command appears at the start of a line (possibly
     preceded by whitespace), so mentions of the command in prose are ignored.
     """
-    if excluded_commands is None:
-        excluded_commands = EXCLUDED_COMMANDS
-    patterns = [
-        re.compile(r"(?m)^\s*" + re.escape(cmd) + r"(?:\s|$)")
-        for cmd in excluded_commands
-    ]
+    cmds = EXCLUDED_COMMANDS if excluded_commands is None else excluded_commands
+    patterns = [re.compile(r"(?m)^\s*" + re.escape(c) + r"(?:\s|$)") for c in cmds]
     for msg in messages:
         if msg.get("role") != "user":
             continue
@@ -356,13 +298,10 @@ def uses_excluded_command(
 
 
 def is_above_token_limit(text: str) -> bool:
-    """True if estimated token count exceeds CAPTURE_MAX_EST_TOKENS.
+    """True if estimated tokens (chars/4) exceed CAPTURE_MAX_EST_TOKENS.
 
-    chars/4 is a rough heuristic and now runs ~30% low against Sonnet 5's
-    tokenizer, so the ceiling admits somewhat larger transcripts than the number
-    suggests. Left as-is deliberately: tightening it would silently start
-    skipping sessions that are captured today. Lower CAPTURE_MAX_EST_TOKENS if
-    you want the old effective cutoff back.
+    chars/4 undercounts Sonnet 5's tokenizer by ~30%; kept so the cutoff doesn't
+    silently start skipping sessions captured today.
     """
     limit = int(os.environ.get("CAPTURE_MAX_EST_TOKENS", str(CAPTURE_MAX_EST_TOKENS)))
     return len(text) // 4 > limit
@@ -423,13 +362,9 @@ def build_log_entry(
 def append_log(entry: dict, *, log_path: pathlib.Path | None = None) -> None:
     """Append one JSON line to log_path with cross-process flock + in-process lock.
 
-    log_path resolves to the module-level LOG_PATH at call time (not frozen as a
-    default arg) so tests that monkeypatch curate.LOG_PATH are honored even for
-    call sites that don't thread an explicit path — main()'s transcript_missing
-    logging wrote 6 test rows into the live W30 log via the frozen default.
+    Defaults resolve at call time (not as a default arg) so tests can patch LOG_PATH.
     """
-    if log_path is None:
-        log_path = LOG_PATH
+    log_path = log_path or LOG_PATH
     line = json.dumps(entry) + "\n"
     with _STATE_LOCK:
         log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -447,8 +382,7 @@ def _log_skip(
     *,
     log_path: pathlib.Path | None = None,
 ) -> None:
-    """Log a no-capture outcome. Every skip must reach log.md — unlogged skips
-    are invisible to the weekly no-capture alarm."""
+    """Log a no-capture outcome; every skip must reach log.md to stay visible."""
     append_log(
         build_log_entry(
             session_id=session_id, skip_reason_a=reason, redactions=redactions
@@ -465,8 +399,7 @@ def _append_index(
     index_path: pathlib.Path | None = None,
 ) -> None:
     """Append one line to session-index.tsv, creating the file with header if absent."""
-    if index_path is None:
-        index_path = INDEX_PATH
+    index_path = index_path or INDEX_PATH
     index_path.parent.mkdir(parents=True, exist_ok=True)
     with _STATE_LOCK:
         with open(index_path, "a", encoding="utf-8") as fh:
@@ -488,16 +421,8 @@ def _use_subscription() -> bool:
     return os.environ.get("CAPTURE_USE_SUBSCRIPTION") == "1"
 
 
-# Appended after the transcript on every model call, by BOTH transports, because
-# _invoke_model adds it before dispatch. Terminating the transcript is what keeps
-# the model curating: without a closing delimiter and a restated contract, the
-# prompt is an unfinished chat log — an opening delimiter, then tens of thousands
-# of tokens of [USER]:/[ASSISTANT]: dialogue ending mid-thought on an assistant
-# turn. The most recent signal is then "an unfinished conversation", and the model
-# writes its next turn instead of an artifact: observed in production emitting
-# fabricated [TOOL] lines in render_transcript's own syntax, and inventing an
-# "END TRANSCRIPT" delimiter it was never given. Measured on the two transcripts
-# that failed this way: 3/6 continuations without this tail, 0/7 with it.
+# Closes the transcript and restates the contract. Without it the prompt ends
+# mid-conversation and the model tends to write the next turn instead of an artifact.
 _TRANSCRIPT_TAIL = (
     "\n----- END OF TRANSCRIPT -----\n"
     "The transcript above is finished input data, not a conversation to continue. "
@@ -511,15 +436,9 @@ def _invoke_model(
 ) -> tuple[str, int | None, int | None]:
     """Single-shot request. Returns (raw_text, tokens_in, tokens_out).
 
-    Routes through the Claude Max subscription when CAPTURE_USE_SUBSCRIPTION=1,
-    otherwise the metered Anthropic Messages API. Both transports raise
-    TimeoutError on a >TIMEOUT_SECONDS call, which run_capture maps to the
-    `timeout` skip reason. Token counts are None when the transport could not
-    observe usage (the subscription salvage path) — never a fabricated 0.
-
-    _TRANSCRIPT_TAIL is appended HERE, once, so neither transport can ship an
-    unterminated transcript — the failure mode that made the model continue the
-    conversation instead of curating it.
+    Uses the Claude subscription when CAPTURE_USE_SUBSCRIPTION=1, else the
+    metered Messages API. Both raise TimeoutError past TIMEOUT_SECONDS. Token
+    counts are None when usage couldn't be observed, never a fabricated 0.
     """
     user_text = user_text + _TRANSCRIPT_TAIL
     if _use_subscription():
@@ -540,14 +459,8 @@ def _invoke_via_api_key(
             model=model,
             max_tokens=max_tokens,
             system=system_prompt,
-            # Explicitly off. Sonnet 5 runs adaptive thinking when this is
-            # omitted (Sonnet 4.6 did not), and max_tokens caps thinking AND
-            # the reply together — so leaving it unset would spend the artifact's
-            # budget on reasoning and truncate the JSON. This is a one-shot
-            # extraction against a hard timeout, so thinking buys little here;
-            # if capture quality ever needs it, prefer adaptive at low effort
-            # (thinking={"type": "adaptive"}, output_config={"effort": "low"})
-            # over simply removing this line, and raise max_tokens with it.
+            # Sonnet 5 thinks by default, and thinking shares max_tokens with the
+            # reply, so leaving it on can truncate the JSON.
             thinking={"type": "disabled"},
             messages=[{"role": "user", "content": user_text}],
             timeout=TIMEOUT_SECONDS,
@@ -559,12 +472,9 @@ def _invoke_via_api_key(
     return msg.content[0].text.strip(), msg.usage.input_tokens, msg.usage.output_tokens
 
 
-# The Claude Code runtime frames every request as an agentic coding task, so a
-# capable model (Sonnet especially) tries to investigate files and use tools
-# instead of just summarizing the transcript — burning its single turn on
-# "Let me find where…" and never emitting the JSON. Leading the user message with
-# this directive forces the one-shot, data-in/JSON-out behavior the prompts assume.
-# It must lead the *user* message; in the system prompt it has no effect.
+# The Claude Code runtime frames requests as agentic coding tasks, so the model
+# tends to investigate instead of answering. This must lead the *user* message;
+# in the system prompt it has no effect.
 _SUBSCRIPTION_DIRECTIVE = (
     "IMPORTANT: You are not in an interactive coding session. Do not use tools, do not "
     "investigate files, do not ask questions, do not take any action. The text below the "
@@ -581,19 +491,10 @@ def _invoke_via_subscription(
 ) -> tuple[str, int | None, int | None]:
     """Drive the model through the Claude Code runtime using subscription auth.
 
-    Auth comes from CLAUDE_CODE_OAUTH_TOKEN (see `claude setup-token`). The
-    runtime controls output length, so max_tokens has no equivalent here — our
-    prompts already constrain the response to compact JSON. tools=[] disables
-    the runtime's built-in toolset so this stays a pure text→text call
-    (allowed_tools only skips permission prompting, it does not remove tools);
-    the user text is prefixed with _SUBSCRIPTION_DIRECTIVE to suppress agentic
-    behavior. max_turns is a safety valve, not a single-shot constraint: at
-    max_turns=1 the CLI ends the run with error_max_turns whenever the agent
-    burns its only turn on anything but the final reply, discarding paid
-    output (regression provenance: tests/test_subscription_invoke.py). A reply
-    that streamed before an error result is kept — see the salvage below. Note
-    CAPTURE_TIMEOUT_SECONDS bounds the whole run, not one turn; raise it, not
-    max_turns, if legitimate multi-turn recoveries start logging `timeout`.
+    Auth comes from CLAUDE_CODE_OAUTH_TOKEN (`claude setup-token`). tools=[]
+    removes the built-in toolset (allowed_tools=[] alone only skips permission
+    prompts). max_turns > 1 is headroom: at 1, any wasted turn ends the run with
+    error_max_turns and discards the reply. TIMEOUT_SECONDS bounds the whole run.
     """
     import asyncio
     from claude_agent_sdk import (
@@ -629,13 +530,8 @@ def _invoke_via_subscription(
                         reply = texts
                 elif isinstance(message, ResultMessage):
                     usage = message.usage or {}
-                    # The runtime serves most input from cache (its own ~22k-token harness
-                    # system prompt dominates), so input_tokens alone is misleadingly tiny.
-                    # Sum all three to reflect what the model actually processed. Note this
-                    # makes subscription cost estimates non-comparable to API mode: they
-                    # include Claude Code's harness overhead the subscription absorbs, and
-                    # a multi-turn run repeats the cache-read sum per turn, so this is an
-                    # upper-bound estimate.
+                    # Most input is the runtime's cached harness prompt, so sum all
+                    # three; this over-estimates vs API mode (upper bound).
                     tokens_in = (
                         (usage.get("input_tokens", 0) or 0)
                         + (usage.get("cache_creation_input_tokens", 0) or 0)
@@ -643,28 +539,18 @@ def _invoke_via_subscription(
                     )
                     tokens_out = usage.get("output_tokens", 0) or 0
         except Exception as exc:
-            # The CLI exits non-zero after an error result (e.g. error_max_turns)
-            # and the SDK surfaces that as an exception mid-iteration — after the
-            # reply text already streamed. Discarding it loses a paid, often-
-            # complete response. The terminal ResultMessage rarely arrives on
-            # this path, so tokens usually stay None (unknown, never a fake 0).
+            # The SDK raises on a CLI error result (e.g. error_max_turns) after
+            # the reply may already have streamed; keep it — it was paid for.
+            # _call_path_a's salvage can dig the artifact out of the full stream.
             if not parts:
                 raise
-            _log_error(
-                f"SUBSCRIPTION_SALVAGE partial reply kept (usage "
-                f"{'captured' if tokens_out is not None else 'not captured'}) "
-                f"after: {exc}"
-            )
-            # Everything that streamed, in order: the downstream outermost-brace
-            # salvage in _call_path_a can dig JSON out of preamble+reply text.
+            _log_error(f"SUBSCRIPTION_SALVAGE partial reply kept after: {exc}")
             return "".join(parts).strip(), tokens_in, tokens_out
-        # Only the latest assistant message is the reply. A multi-turn run may
-        # emit preamble text on early turns; concatenating it would turn an
-        # exact-match `null` reply into malformed_json downstream.
+        # Only the last assistant message is the reply: earlier turns' preamble
+        # would turn an exact `null` into malformed_json.
         return "".join(reply).strip(), tokens_in, tokens_out
 
-    # asyncio.TimeoutError is TimeoutError on 3.11+, so the existing
-    # `except TimeoutError` in run_capture catches a stalled subscription call.
+    # asyncio.TimeoutError is TimeoutError on 3.11+, which run_capture catches.
     return asyncio.run(asyncio.wait_for(_run(), timeout=TIMEOUT_SECONDS))
 
 
@@ -672,9 +558,10 @@ def _call_path_a(scrubbed_text: str, prompts_dir: pathlib.Path) -> dict | None:
     """Call claude-sonnet-5 with the curation prompt.
 
     Returns the artifact dict with usage keys (tokens_in/tokens_out/cost_usd)
-    merged in. A model null does NOT return None: it returns the usage dict
-    plus {"_null": True} so the spend still reaches the log. (Test doubles may
-    return bare None; run_capture accepts both null spellings.)
+    merged in. A model null returns the usage dict plus {"_null": True} so the
+    spend still reaches the log (test doubles may return bare None). If no
+    attempt yields an artifact and any reply was unusable, raises
+    JSONDecodeError carrying `.usage` — malformed wins over a trailing null.
     """
     if os.environ.get("CAPTURE_MOCK_SDK") == "1":
         raise RuntimeError(
@@ -683,10 +570,7 @@ def _call_path_a(scrubbed_text: str, prompts_dir: pathlib.Path) -> dict | None:
 
     system_prompt = (prompts_dir / "curation-system-prompt.md").read_text()
 
-    # Sum tokens across attempts so a retry's cost is fully accounted for. A
-    # salvaged subscription reply arrives with unknown usage (None); once any
-    # attempt's usage is lost the totals are unknown too, and the log gets
-    # null rather than an understated number.
+    # Summed across attempts; once any attempt's usage is unknown, so is the total.
     tokens_in = tokens_out = 0
     usage_lost = False
 
@@ -696,14 +580,11 @@ def _call_path_a(scrubbed_text: str, prompts_dir: pathlib.Path) -> dict | None:
         return {
             "tokens_in": tokens_in,
             "tokens_out": tokens_out,
-            # Under subscription this is an estimated API-equivalent cost, not billed.
             "cost_usd": _estimate_cost_a(tokens_in, tokens_out),
         }
 
-    data: dict | None = None
-    # Holds the first unparseable reply so a later null can't relabel the outcome.
-    unparsed: json.JSONDecodeError | None = None
-    for _attempt in range(PATH_A_RESAMPLES + 1):
+    malformed: str | None = None
+    for _ in range(PATH_A_RESAMPLES + 1):
         text, tin, tout = _invoke_model(
             MODEL_A, MAX_TOKENS_A, system_prompt, scrubbed_text
         )
@@ -712,73 +593,33 @@ def _call_path_a(scrubbed_text: str, prompts_dir: pathlib.Path) -> dict | None:
         else:
             tokens_in += tin
             tokens_out += tout
-        raw = _strip_fences(text)
+        raw = _strip_fences(text).strip()
         if raw.lower() == "null":
-            data = None
-            continue  # non-deterministic null — try once more, then give up
-        bad: json.JSONDecodeError | None = None
+            continue
         try:
             data = json.loads(raw)
-        except json.JSONDecodeError as exc:
-            bad = exc
-        else:
-            if data is None:
-                continue  # payload was a literal `null` — same as the raw case
-            if not _is_artifact(data):
-                # Parses fine but does not satisfy the contract: the wrong type
-                # entirely (a quoted "null", a list, a number), or an object
-                # whose title/body/type is not a string. Neither reaches the
-                # except branch, and both used to fall through to the write path
-                # and die there — as an AttributeError or a TypeError — after
-                # the call was paid for and before anything was logged. Give
-                # them the same recovery path as an unparseable reply.
-                bad = json.JSONDecodeError(
-                    "model reply is not an artifact-shaped object", raw, 0
-                )
+        except json.JSONDecodeError:
+            data = None
+        if not _is_artifact(data):
+            # Replies sometimes wrap valid JSON in prose; it was paid for.
+            data = _salvage_artifact(raw)
+        if data is not None:
+            data.update(_usage())
+            return data
+        malformed = raw
 
-        if bad is not None:
-            # The runtime sometimes wraps otherwise-valid JSON in prose or
-            # transcript echoes (fences not at line start defeat _CODE_FENCE_RE).
-            # Salvage the artifact before declaring the response malformed — it
-            # was already paid for.
-            salvaged = _salvage_artifact(raw)
-            if salvaged is None:
-                if _attempt < PATH_A_RESAMPLES:
-                    # Resample like a null: an unusable reply is a
-                    # non-deterministic generation failure, not a permanent one.
-                    # Costs one extra input pass on a session already paid for.
-                    # Held, not raised: if a later attempt also fails to produce
-                    # an artifact this is what gets logged, so a malformed reply
-                    # is never erased from log.md by a subsequent null.
-                    unparsed = bad
-                    data = None
-                    continue
-                _log_error(f"PATH_A malformed_json: {raw[:200]}")
-                bad.usage = _usage()  # type: ignore[attr-defined]
-                raise bad
-            data = salvaged
-        break  # got an artifact
-
-    usage = _usage()
-    if data is None:
-        if unparsed is not None:
-            # No artifact, and at least one attempt was unparseable — that is the
-            # notable event, so log it as malformed_json rather than letting a
-            # trailing null relabel it (the malformed_json rate in log.md is the
-            # instrument this failure class is tracked by).
-            _log_error("PATH_A malformed_json: unparseable reply, resample gave null")
-            unparsed.usage = _usage()  # type: ignore[attr-defined]
-            raise unparsed
-        return {**usage, "_null": True}
-    data.update(usage)
-    return data
+    if malformed is not None:
+        _log_error(f"PATH_A malformed_json: {malformed[:200]}")
+        exc = json.JSONDecodeError("reply is not an artifact", malformed, 0)
+        exc.usage = _usage()  # type: ignore[attr-defined]
+        raise exc
+    return {**_usage(), "_null": True}
 
 
 def _estimate_cost_a(tokens_in: int, tokens_out: int) -> float:
-    # claude-sonnet-5: $3/M input, $15/M output — same list price as Sonnet 4.6,
-    # so this stays accurate. (Introductory rates of $2/$10 run through
-    # 2026-08-31; until then this over-reports rather than under-reports.)
-    return (tokens_in * 3 + tokens_out * 15) / 1_000_000
+    # claude-sonnet-5 list price: $2/M input, $10/M output. Under subscription
+    # this is an API-equivalent estimate, not a billed amount.
+    return (tokens_in * 2 + tokens_out * 10) / 1_000_000
 
 
 # ── file writing ───────────────────────────────────────────────────────────────
@@ -828,8 +669,7 @@ def _write_artifact(
 
 _ROLE_MAP = {"user": "[USER]", "assistant": "[ASSISTANT]"}
 
-# Per-block render caps (chars). Bash commands and edit diffs are the high-signal,
-# low-volume parts; error results are kept near-whole; successful output is headed.
+# Per-block render caps (chars).
 _BASH_CMD_CAP = 300
 _EDIT_DIFF_CAP = 200
 _OTHER_INPUT_CAP = 120
@@ -849,15 +689,10 @@ def _tool_result_text(block: dict) -> str:
 
 
 def _scrub_cap(text: str, cap: int, counts: dict[str, int] | None) -> str:
-    """Scrub *text*, then truncate to *cap* — in that order, never the reverse.
+    """Scrub *text*, then truncate to *cap*; accumulate redaction counts into *counts*.
 
-    Truncating first defeats the scrubber outright: the private_key rule needs
-    its closing -----END … PRIVATE KEY----- to match, and the length-anchored
-    token rules (AIza…{35}, AKIA…{16}) need their full body. A cap that lands
-    mid-secret leaves a fragment no rule matches, and that fragment is what
-    would reach the model and the note. Redaction counts are accumulated into
-    *counts* so the artifact's `redactions:` total still reflects what was
-    caught here rather than under-reporting it.
+    Never the reverse order: a cap landing mid-secret leaves a fragment no rule
+    matches (private keys need their END line, AKIA/AIza their full length).
     """
     import scrub as scrub_mod
 
@@ -875,7 +710,7 @@ def _render_tool_use(block: dict, counts: dict[str, int] | None = None) -> str:
     if name == "Bash":
         cmd = _scrub_cap(str(inp.get("command", "")), _BASH_CMD_CAP, counts)
         return f"[TOOL] Bash: {cmd}"
-    if name in ("Edit", "MultiEdit"):
+    if name == "Edit":
         diff = f"{inp.get('old_string', '')} -> {inp.get('new_string', '')}"
         return (
             f"[TOOL] {name}: {inp.get('file_path', '')} | "
@@ -894,21 +729,15 @@ def render_transcript(
 ) -> str:
     """Build the curator's input text from loaded messages.
 
-    Each message's text becomes `[ROLE]: <text>`. When raw content `blocks` are
-    present (list-form transcript lines), tool activity is surfaced too — this is
-    what the model never used to see:
+    Each message becomes `[ROLE]: <text>`. When raw `blocks` are present, tool
+    activity is surfaced too:
       - tool_use            → `[TOOL] <Name>: <command/diff/input>`
       - tool_result success → `[OUT] <head>` (CAPTURE_SUCCESS_HEAD_CHARS; 0 = drop)
-      - tool_result error   → `[ERROR] <text>` (always kept, prioritised over budget)
+      - tool_result error   → `[ERROR] <text>` (always kept)
 
-    Tool-derived chars accumulate against CAPTURE_TOOL_CHARS_BUDGET; once spent,
-    further tool_use / [OUT] lines are dropped (text and [ERROR] still emitted), so
-    the enriched transcript stays under the token guard on pathological runs. The
-    text-only `content` the filters read is untouched — only the model input grows.
-
-    Every tool-derived string is scrubbed BEFORE its length cap is applied (see
-    _scrub_cap); pass a dict as *redactions* to collect what those scrubs caught,
-    since the caller's own scrub of the finished text cannot see them.
+    Once CAPTURE_TOOL_CHARS_BUDGET is spent, further [TOOL]/[OUT] lines are
+    dropped. Tool strings are scrubbed before capping; pass *redactions* to
+    collect those counts.
     """
     budget = int(os.environ.get("CAPTURE_TOOL_CHARS_BUDGET", "30000"))
     head = int(os.environ.get("CAPTURE_SUCCESS_HEAD_CHARS", "200"))
@@ -969,25 +798,14 @@ def run_capture(
     """Full capture pipeline: scrub → threshold → dedup → API calls → write → log."""
     import scrub as scrub_mod
 
-    if vault_dir is None:
-        vault_dir = VAULT_DIR
-    vault_dir = pathlib.Path(vault_dir)
-    if log_path is None:
-        log_path = LOG_PATH
-    if index_path is None:
-        index_path = INDEX_PATH
-    if prompts_dir is None:
-        prompts_dir = REPO_ROOT / "prompts"
+    vault_dir = pathlib.Path(vault_dir or VAULT_DIR)
+    log_path = log_path or LOG_PATH
+    index_path = index_path or INDEX_PATH
+    prompts_dir = prompts_dir or REPO_ROOT / "prompts"
     if date_str is None:
         date_str = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
 
-    # ── 1. scrub transcript ───────────────────────────────────────────────────
-    # render_transcript surfaces tool activity ([TOOL]/[OUT]/[ERROR]) for the model;
-    # scrub still runs on the full assembled text, so secrets in commands/output are
-    # redacted exactly as prose is.
-    # Tool blocks are scrubbed inside render (before their length caps chop a
-    # secret into an unmatchable fragment); those counts come back here so the
-    # artifact's `redactions:` total covers them too.
+    # ── 1. scrub transcript (tool blocks are pre-scrubbed inside render) ─────
     tool_redactions: dict[str, int] = {}
     raw_text = render_transcript(transcript, tool_redactions)
     scrubbed_text, redactions = scrub_mod.scrub(raw_text)
@@ -1038,27 +856,19 @@ def run_capture(
         skip_reason_a = "timeout"
     except Exception as exc:
         skip_reason_a = f"error:{type(exc).__name__}"
-        # log.md keeps only the type name; without the message a bare SDK
-        # `Exception` (e.g. a control-request timeout) is undiagnosable.
-        _log_error(f"PATH_A {type(exc).__name__}: {exc}")
+        _log_error(f"PATH_A {type(exc).__name__}: {exc}")  # log.md keeps only the type
 
     # ── 8. scrub model output (title, body, tags, source_links) ──────────────
     if result_a:
         result_a["title"], _ = scrub_mod.scrub(result_a.get("title", ""))
         result_a["body"], _ = scrub_mod.scrub(result_a.get("body", ""))
-        _tags = result_a.get("tags", [])
-        result_a["tags"] = (
-            [scrub_mod.scrub(str(t))[0] for t in _tags] if isinstance(_tags, list) else []
-        )
-        # str() the elements and tolerate a non-list: these come straight from the
-        # model, and a non-string element here would raise inside scrub() after
-        # the call was already paid for.
-        _links = result_a.get("source_links", [])
-        result_a["source_links"] = (
-            [scrub_mod.scrub(str(lnk))[0] for lnk in _links]
-            if isinstance(_links, list)
-            else []
-        )
+        for key in ("tags", "source_links"):  # untrusted: may be non-lists/non-strings
+            vals = result_a.get(key, [])
+            result_a[key] = (
+                [scrub_mod.scrub(str(v))[0] for v in vals]
+                if isinstance(vals, list)
+                else []
+            )
 
     # ── 9 & 10. sanitize title + write Path A ────────────────────────────────
     path_a_rel: str | None = None
@@ -1079,7 +889,6 @@ def run_capture(
             model=MODEL_A,
             cost_usd=cost_usd_a,
             redactions=redactions,
-            # model tags are scrubbed (step 8) then slug-coerced; empties drop out
             tags=["claude-code", "curated"]
             + [s for s in (sanitize_tag(t) for t in result_a["tags"][:10]) if s],
             body=result_a.get("body", ""),
@@ -1140,10 +949,7 @@ def _load_transcript(transcript_path: str) -> list[dict]:
                         messages.append(
                             {
                                 "role": role,
-                                "content": _extract_text(raw),
-                                # Raw blocks travel alongside the text-only content
-                                # so render_transcript can surface tool activity to
-                                # the model while the filters keep reading content.
+                                "content": _extract_text(raw),  # what filters read
                                 "blocks": raw if isinstance(raw, list) else None,
                             }
                         )
@@ -1175,10 +981,7 @@ def main():
         transcript = _load_transcript(transcript_path)
     except Exception as exc:
         _log_error(f"Failed to load transcript {transcript_path!r}: {exc}")
-        # Must still be visible in log.md: exiting before any entry made these
-        # sessions invisible to the weekly no-capture alarm (15 unlogged
-        # losses in W28 alone). Never let the logging itself fail the hook.
-        try:
+        try:  # still record it in log.md, but never let logging fail the hook
             _log_skip(session_id, "transcript_missing", {})
         except Exception as log_exc:
             _log_error(f"Failed to log transcript_missing: {log_exc}")

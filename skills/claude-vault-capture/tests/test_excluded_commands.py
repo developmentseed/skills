@@ -1,8 +1,6 @@
-"""Unit tests for uses_excluded_command filter.
+"""Unit tests for uses_excluded_command.
 
-The public default for EXCLUDED_COMMANDS is empty (the pipeline captures
-everything); extensions populate it via CAPTURE_EXCLUDED_COMMANDS. These tests
-exercise the matching *mechanism* by passing the command list explicitly.
+EXCLUDED_COMMANDS defaults to empty, so these pass the command list explicitly.
 """
 
 from curate import uses_excluded_command, EXCLUDED_COMMANDS
@@ -76,7 +74,5 @@ class TestUsesExcludedCommand:
         assert uses_excluded_command(msgs, excluded_commands=["/other"]) is False
 
     def test_public_default_is_empty_so_nothing_is_excluded(self):
-        # With no CAPTURE_EXCLUDED_COMMANDS set, the gate is dormant: even a
-        # /my-journal turn is captured (not skipped).
         assert EXCLUDED_COMMANDS == []
         assert uses_excluded_command(_msgs("/my-journal")) is False

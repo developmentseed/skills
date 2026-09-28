@@ -1,11 +1,5 @@
-"""End-to-end tests for the full capture pipeline driven through curate.main().
-
-These exercise the real argv → _load_transcript → run_capture → written vault
-files → log → index flow with model calls replayed from mock-responses.json
-(via the mock_from_responses fixture) or bespoke inline mocks. No network.
-
-Companion to tests/test_failure_isolation.py, which owns the token-preservation
-assertions on the error paths with inline mocks.
+"""End-to-end tests through curate.main(): argv → transcript → run_capture → vault
+files → log → index, with model calls replayed from mocks. No network.
 """
 
 import json
@@ -101,9 +95,7 @@ class TestScrubbingStages:
     def test_output_scrub_redacts_secret_in_written_file(
         self, run_main, monkeypatch, temp_vault
     ):
-        """Post-API scrub: a secret in the model's returned body/title is redacted
-        in the written file. The with-secrets mock body is already clean, so this
-        needs a bespoke inline mock that returns a planted secret."""
+        """Inline mock: the with-secrets fixture's returned body is already clean."""
         import curate
 
         monkeypatch.setenv("CAPTURE_MOCK_SDK", "1")
@@ -173,8 +165,7 @@ class TestEdgeCaseSkips:
 
     def test_excluded_command(self, run_main, monkeypatch, temp_vault, tmp_path):
         monkeypatch.setenv("CAPTURE_MOCK_SDK", "1")
-        # EXCLUDED_COMMANDS is evaluated once at import (default empty), so setting
-        # the env var here would not re-trigger it — patch the resolved constant.
+        # EXCLUDED_COMMANDS is resolved at import: patch the constant, not the env var.
         import curate
 
         monkeypatch.setattr(curate, "EXCLUDED_COMMANDS", ["/my-journal"])
@@ -245,9 +236,7 @@ class TestCredentialGuards:
             run_main(missing, "gone00112233aabb0012", "/tmp")
         assert exc.value.code == 0
         assert _no_files(temp_vault)
-        # The miss must be logged (to the temp log, never the real one): these
-        # sessions were invisible to the weekly no-capture alarm before
-        # skip_reason transcript_missing existed.
+        # The miss must still be logged (to the temp log, never the real one).
         entries = read_log(temp_vault.log_path)
         assert len(entries) == 1
         assert entries[0]["skip_reason_a"] == "transcript_missing"

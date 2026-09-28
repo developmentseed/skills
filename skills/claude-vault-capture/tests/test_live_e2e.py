@@ -1,15 +1,6 @@
-"""Opt-in live E2E test for the real subscription pipeline.
-
-SKIPPED BY DEFAULT. Enable with CAPTURE_LIVE_TESTS=1. This makes real model
-calls through the Claude Code runtime (CAPTURE_USE_SUBSCRIPTION=1), so it SPENDS
-MAX SUBSCRIPTION QUOTA and requires the `claude` CLI to be logged in
-(`claude setup-token` → CLAUDE_CODE_OAUTH_TOKEN, or ~/.claude_vault_oauth_token).
-
-It runs a decision-worthy transcript through the full pipeline into a temp vault
-and verifies the artifact lands under tmp_path (never ~/Obsidian), carries valid
-frontmatter, skips cleanly (skip_reason_a is null), and reports non-trivial token
-usage — a regression guard for the cache-token summation in
-_invoke_via_subscription.
+"""Opt-in live E2E (CAPTURE_LIVE_TESTS=1): real subscription calls that SPEND MAX
+QUOTA and need a logged-in `claude` CLI (CLAUDE_CODE_OAUTH_TOKEN or
+~/.claude_vault_oauth_token).
 """
 
 import os

@@ -1,4 +1,4 @@
-"""Tests for _strip_fences and token capture on failure paths."""
+"""Tests for _strip_fences."""
 
 import json
 

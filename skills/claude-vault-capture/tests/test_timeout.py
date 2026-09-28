@@ -1,9 +1,5 @@
-"""Timeout handling for the metered API-key transport.
-
-Regression coverage for a real bug: anthropic.APITimeoutError is not a subclass
-of the builtin TimeoutError, so run_capture's `except TimeoutError` never caught
-it and a timed-out call was mislabeled `error:APITimeoutError` instead of the
-documented `timeout` skip reason. _invoke_via_api_key now normalizes it.
+"""Timeout handling for the API-key transport: anthropic.APITimeoutError is not a
+builtin TimeoutError, so _invoke_via_api_key must normalize it to the `timeout` skip.
 """
 
 import importlib
@@ -44,7 +40,6 @@ def _above_threshold_transcript():
 
 
 def test_timeout_seconds_defaults_to_30(monkeypatch):
-    """With no override set, the call timeout is the documented 30s default."""
     monkeypatch.delenv("CAPTURE_TIMEOUT_SECONDS", raising=False)
     try:
         importlib.reload(curate)
@@ -54,7 +49,6 @@ def test_timeout_seconds_defaults_to_30(monkeypatch):
 
 
 def test_timeout_seconds_env_override(monkeypatch):
-    """CAPTURE_TIMEOUT_SECONDS overrides the default at module load."""
     monkeypatch.setenv("CAPTURE_TIMEOUT_SECONDS", "90")
     try:
         importlib.reload(curate)
@@ -91,10 +85,8 @@ def test_run_capture_maps_api_timeout_to_skip_reason(monkeypatch, temp_vault):
 
 
 class TestSonnet5RequestShape:
-    """Sonnet 5 runs adaptive thinking when `thinking` is omitted, and max_tokens
-    caps thinking and the reply together — so an unset `thinking` would spend the
-    artifact's budget on reasoning and truncate the JSON into malformed_json.
-    """
+    """Omitting `thinking` enables adaptive thinking, which shares max_tokens with
+    the reply and would truncate the JSON into malformed_json."""
 
     def _capture_kwargs(self, monkeypatch):
         seen = {}
@@ -110,7 +102,9 @@ class TestSonnet5RequestShape:
 
         monkeypatch.setattr(anthropic, "Anthropic", _Client)
         try:
-            curate._invoke_via_api_key(curate.MODEL_A, curate.MAX_TOKENS_A, "sys", "text")
+            curate._invoke_via_api_key(
+                curate.MODEL_A, curate.MAX_TOKENS_A, "sys", "text"
+            )
         except RuntimeError:
             pass
         return seen
@@ -125,3 +119,6 @@ class TestSonnet5RequestShape:
 
     def test_output_budget_has_headroom_for_the_new_tokenizer(self, monkeypatch):
         assert curate.MAX_TOKENS_A >= 2600  # ~30% above the Sonnet 4.6 budget of 2000
+
+    def test_cost_estimate_uses_sonnet5_list_price(self):
+        assert curate._estimate_cost_a(1_000_000, 1_000_000) == 12.0  # $2 in + $10 out

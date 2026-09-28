@@ -66,7 +66,6 @@ class TestLoadTranscript:
         ]
 
     def test_list_content_blocks(self, tmp_path):
-        # This is the real-world case that was causing "sequence item 3: expected str"
         path = self._write_jsonl(
             tmp_path,
             [
@@ -151,10 +150,6 @@ class TestLoadTranscript:
 
 
 class TestTranscriptMissingIsLogged:
-    """A missing/unreadable transcript must produce a log.md entry, not a silent
-    exit-0 — these sessions were invisible to the weekly no-capture alarm
-    (15 unlogged losses in W28 alone)."""
-
     def test_missing_transcript_logs_skip_entry(self, tmp_path, monkeypatch):
         import curate
         import pytest
