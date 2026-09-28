@@ -1,28 +1,32 @@
 #!/usr/bin/env python3
-"""Report which Claude Code sessions on this machine left a handoff note since a given day.
+"""Report which Claude Code sessions on this machine left a handoff note, and which didn't.
 
-Read-only. Joins the live-session registry (<config>/sessions/<pid>.json: name -> sessionId)
-with each session's transcript (<config>/projects/*/<sessionId>.jsonl, plus its subagents'),
-where every Write and Edit tool call is recorded with its file path and time. Neither is a
-documented interface: a running session that can't be matched is reported as `unknown`, so the
-caller asks it instead. <config> is $CLAUDE_CONFIG_DIR, else ~/.claude.
+Read-only and safe to re-run. Running sessions come from the registry (<config>/sessions/*.json);
+each session's transcript (<config>/projects/*/<sessionId>.jsonl, plus its subagents' under
+projects/*/<sessionId>/subagents/) records every Write and Edit with its file path and time.
+Neither is a documented interface. <config> is $CLAUDE_CONFIG_DIR, else ~/.claude. The session
+running this ($CLAUDE_CODE_SESSION_ID) is left out.
 
-The window runs from the start of --date (default today) to now, so a run after midnight with
---date <yesterday> still sees the evening's work.
+The window runs from the start of --date to now. --date defaults to 5 hours ago, so a run
+shortly after midnight still covers the evening.
 
-A note counts as a handoff when its file name contains "handoff", it ends in .md, it is not
-under a memory/ directory, and any date in its name falls between the day checked and a few
-days after it. It must also still exist, not sit in a temp directory or a git worktree (both
-get deleted), and not open with a SUPERSEDED banner.
+A note is a .md file whose name contains "handoff", outside memory/, temp dirs and git worktrees.
+- Out of date: a session is stale when, after its latest write to a note, it made more than 30
+  tool calls in its main conversation or file edits through its subagents.
+- Listed: its notes that still exist, don't open with a SUPERSEDED banner, and have any date in
+  their name between --date and 3 days after it. If none qualify, its latest usable note. A
+  snapshot named ..._snapshot-<sid8>.md counts for the session it describes, not its writer.
 
-Prints TSV, one row per handoff note (one row per session without one):
+Prints TSV, one row per listed note (one row per session without one):
   verdict  session  written  calls_after  last_active  project  path  title
-verdict: fresh | stale | none | unknown   (running sessions, from --live)
-         closed | closed-none             (sessions no longer running that worked in the window)
+verdict: fresh | stale | none                (running sessions)
+         closed | closed-stale | closed-none (sessions no longer running)
+Sessions without a note that made fewer than 30 calls (a quick question, an earlier run of this
+report) are left out.
 
---digest NAME instead prints NAME's latest note and a compact log of its transcript over the
-window (prompts, Claude's messages, one line per tool call, no tool output, secrets masked),
-for writing its handoff from outside while it is busy.
+--digest NAME|SID8 instead prints that session's latest note, the path for its snapshot (in the
+project dir of the session running this), and a compact log of its window: prompts, Claude's
+messages, one line per tool call, no tool output, secrets masked.
 """
 
 import argparse
@@ -34,18 +38,33 @@ from pathlib import Path
 
 SESSION_ID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 TEMP_ROOTS = ("/tmp/", "/private/tmp/", "/var/folders/", "/private/var/folders/")
-STALE_AFTER = 10  # tool calls after the latest handoff that make it stale
-AHEAD_DAYS = (
-    3  # a note may be named for a day up to this far ahead (written Friday for Monday)
-)
+STALE_AFTER = 30  # work after the latest note that makes it out of date
+MIN_WORK = 30  # below this, a session without a note is not worth reporting
+# a note may be named for a day up to this far ahead (written on Friday for Monday)
+AHEAD_DAYS = 3
+FILE_TOOLS = ("Write", "Edit", "NotebookEdit")
 NAME_DATE = re.compile(r"(20\d\d)[-_]?([01]\d)[-_]?([0-3]\d)")
-# a line that opens with the word, e.g. "> ⏭️ **SUPERSEDED by x.md**"; "superseded in part" doesn't count
-BANNER = re.compile(r"\W*superseded\b(?!\s+in\s+part)", re.I)
+SNAPSHOT = re.compile(r"snapshot-([0-9a-f]{8})\.md$")
+# a line that opens with the word, maybe after a date, and says what replaced it:
+# "> ⏭️ **SUPERSEDED by x.md**", "> **2026-09-28: superseded. START AT …**", "SUPERSEDED 2026-09-24 → x".
+# Not "## Superseded options", "superseded in part", or the word in the middle of prose.
+BANNER = re.compile(
+    r"\W*(?:\d{4}-\d{2}-\d{2}[^:\n]{0,20}:\s*\W*)?superseded\b(?=\s*(?:by\b|as\b|for\b|[.:;,→—–*-]|\d|$))",
+    re.I,
+)
 SECRET = re.compile(
-    r"(?i)(bearer\s+|(?:token|password|passwd|secret|api[_-]?key)\s*[=:]\s*)\S+"
-    r"|\b(?:ghp|gho|ghs|github_pat|sk|xox[abp])[-_A-Za-z0-9]{10,}"
+    r"(?i:((?:bearer|basic)\s+"
+    r"|[\w-]*(?:token|passw(?:or)?d|secret|api[_-]?key|access[_-]?key|credential)[\w-]*[\"']?\s*[=:]\s*[\"']?"
+    r"|--[\w-]*(?:token|password|secret|key)[\w-]* +))[^\s\"',}]+"
+    r"|\b(?:ghp_|gho_|ghs_|ghu_|github_pat_|sk-|xox[abprs]-)[A-Za-z0-9_-]{10,}"
+    r"|\bAKIA[0-9A-Z]{16}\b"
+    r"|(?<=://)[^/\s:@]+:[^/\s@]+(?=@)"
 )
 DIGEST_CHARS = 25_000  # under Claude Code's default Bash output cap (30k characters)
+
+
+def default_day(now):
+    return (now - timedelta(hours=5)).date()
 
 
 def start_of(day):
@@ -73,31 +92,43 @@ def entries(transcript, since, needle=None):
                 yield ts, e
 
 
-def is_handoff(path, day):
+def in_worktree(path):
+    # a `git worktree add` checkout (Claude's .claude/worktrees/ included) has a .git file pointing
+    # into .git/worktrees/; a submodule's points into .git/modules/, a main checkout has a .git dir
+    for parent in Path(path).parents:
+        dot_git = parent / ".git"
+        if dot_git.is_file():
+            try:
+                return "/worktrees/" in dot_git.read_text(errors="replace")
+            except OSError:
+                return False
+        if dot_git.is_dir():
+            return False
+    return False
+
+
+def is_note(path):
     name = Path(path).name.lower()
-    # an older note edited today isn't today's handoff, nor is one named after a deadline;
-    # one written a few days ahead (on Friday for Monday) is
-    dates = {"-".join(d) for d in NAME_DATE.findall(name)}
-    ahead = (day + timedelta(days=AHEAD_DAYS)).isoformat()
     return (
         "handoff" in name
         and name.endswith(".md")
         and "/memory/" not in path
-        and (not dates or any(day.isoformat() <= d <= ahead for d in dates))
+        and not path.startswith(TEMP_ROOTS)
+        and not in_worktree(path)
     )
 
 
-def in_worktree(path):
-    # a `git worktree add` checkout (Claude's .claude/worktrees/ included) has a .git *file*
-    return any((p / ".git").is_file() for p in Path(path).parents)
+def dated_for(path, day):
+    # an older note edited that day isn't the one to start from, nor is one named after a
+    # deadline; one written a few days ahead (on Friday for Monday) is
+    dates = {"-".join(d) for d in NAME_DATE.findall(Path(path).name)}
+    ahead = (day + timedelta(days=AHEAD_DAYS)).isoformat()
+    return not dates or any(day.isoformat() <= d <= ahead for d in dates)
 
 
 def note_title(path):
-    """Return the note's title (first heading, else its file name), or None if it can't be used:
-    a denied or failed Write leaves no file, temp dirs and worktrees get deleted, and a note that
-    opens with a SUPERSEDED banner points to another note."""
-    if path.startswith(TEMP_ROOTS) or in_worktree(path):
-        return None
+    """Return the note's title (first heading, else its file name), or None if it's gone (a denied
+    Write leaves no file) or opens with a SUPERSEDED banner (it points to another note)."""
     try:
         with open(path, encoding="utf-8-sig", errors="replace") as fh:
             lines = [line.strip() for line, _ in zip(fh, range(200))]
@@ -175,48 +206,43 @@ def digest(transcript, since):
     return text
 
 
-def scan(transcripts, day):
-    """Return ({handoff path: (last write time, title)}, [tool call times]) from the start of `day`."""
-    handoffs, calls = {}, []
-    for transcript in transcripts:
-        for ts, entry in entries(transcript, start_of(day), needle='"tool_use"'):
+def scan(transcript, subagents, day):
+    """Return ({note path: last write time}, [work times], entrypoint) from the start of `day`.
+    Work is every tool call in the main conversation plus file edits by subagents: their reads are
+    noise, their edits (new worktrees, files) are what a handoff must mention. The entrypoint
+    (cli, sdk-py, …) tells an interactive session from automation."""
+    notes, work, entrypoint = {}, [], None
+    for f in (transcript, *subagents):
+        for ts, entry in entries(f, start_of(day), needle='"tool_use"'):
             if entry.get("type") != "assistant":
                 continue
+            if f is transcript and entrypoint is None:
+                entrypoint = entry.get("entrypoint")
             for block in (entry.get("message") or {}).get("content") or []:
                 if not isinstance(block, dict) or block.get("type") != "tool_use":
                     continue
-                calls.append(ts)
-                path = (block.get("input") or {}).get("file_path") or ""
-                if block.get("name") in ("Write", "Edit") and is_handoff(path, day):
-                    handoffs[path] = max(ts, handoffs.get(path, ts))
-    notes = {}
-    for path, ts in handoffs.items():
-        if (title := note_title(path)) is not None:
-            notes[path] = (ts, title)
-    return notes, calls
+                i = block.get("input") or {}
+                path = str(i.get("file_path") or i.get("notebook_path") or "")
+                edit = block.get("name") in FILE_TOOLS
+                if edit and is_note(path):
+                    notes[path] = max(ts, notes.get(path, ts))
+                if f is transcript or (edit and not path.startswith(TEMP_ROOTS)):
+                    work.append(ts)
+    return notes, work, entrypoint
 
 
 def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     p.add_argument(
-        "--live",
-        nargs="*",
-        default=[],
-        help="names of the running sessions, from ListAgents",
-    )
-    p.add_argument(
-        "--self", dest="me", help="this session's own name, left out of the report"
-    )
-    p.add_argument(
         "--date",
         type=date.fromisoformat,
-        default=date.today(),
+        default=default_day(datetime.now()),
         help="start of the window",
     )
     p.add_argument(
         "--digest",
-        metavar="NAME",
-        help="print NAME's latest note and a compact log of its transcript",
+        metavar="NAME|SID8",
+        help="print a session's latest note and a compact log of its day",
     )
     p.add_argument(
         "--claude-dir",
@@ -226,95 +252,123 @@ def main(argv=None):
         ).expanduser(),
     )
     a = p.parse_args(argv)
+    me = os.environ.get("CLAUDE_CODE_SESSION_ID")
 
-    # name -> registry entry; a name can linger in an old file, so the newest entry wins
-    registry = {}
+    live = {}  # running interactive sessions: session id -> name
     for f in (a.claude_dir / "sessions").glob("*.json"):
         try:
             s = json.loads(f.read_text())
         except (OSError, ValueError):
             continue
-        name = s.get("name")
-        if name and s.get("updatedAt", 0) >= registry.get(name, {}).get("updatedAt", 0):
-            registry[name] = s
+        sid = s.get("sessionId")
+        if sid and sid != me and s.get("kind", "interactive") == "interactive":
+            live[sid] = s.get("name") or sid[:8]
+
+    def subagents(sid):
+        return list(a.claude_dir.glob(f"projects/*/{sid}/subagents/**/*.jsonl"))
 
     if a.digest:
-        sid = registry.get(a.digest, {}).get("sessionId")
+        # a running session by name, or any session by the first 8+ characters of its id
+        sid = next((s for s, n in live.items() if n == a.digest), None)
+        if sid is None and re.fullmatch(r"[0-9a-f-]{8,36}", a.digest):
+            sid = a.digest + "*"
         t = next(a.claude_dir.glob(f"projects/*/{sid}.jsonl"), None) if sid else None
-        if t is None:
+        if t is None or not SESSION_ID.fullmatch(t.stem):
             raise SystemExit(f"{a.digest}: no transcript found")
-        notes, _ = scan([t, *t.with_suffix("").glob("subagents/**/*.jsonl")], a.date)
-        # the session's notes live next to its memory, which can differ from the transcript's dir
-        out_dir = str(t.parent)
-        if notes:
-            path, (ts, title) = max(notes.items(), key=lambda kv: kv[1][0])
-            out_dir = str(Path(path).parent)
-            print(f"latest note: {tilde(path)} ({title}), last written {hhmm(ts)}")
+        notes, _, _ = scan(t, subagents(t.stem), a.date)
+        # its own notes, not the snapshots it wrote about other sessions
+        about = {n: SNAPSHOT.search(n) for n in notes}
+        written = {
+            n: ts
+            for n, ts in notes.items()
+            if note_title(n) is not None
+            and (about[n] is None or t.stem.startswith(about[n].group(1)))
+        }
+        if written:
+            latest = max(written, key=written.get)
+            print(
+                f"latest note: {tilde(latest)} ({note_title(latest)}), last written {hhmm(written[latest])}"
+            )
         else:
             print(f"latest note: none since {a.date}")
-        print(f"write to: {tilde(out_dir)}")
+        own = next(a.claude_dir.glob(f"projects/*/{me}.jsonl"), None) if me else None
+        snapshot = (own or t).parent / f"handoff_{a.date}_snapshot-{t.stem[:8]}.md"
+        print(f"snapshot: {tilde(str(snapshot))}")
         print(digest(t, start_of(a.date)))
         return
 
-    names = [n for n in dict.fromkeys(a.live) if n != a.me]
-    live = {registry[n]["sessionId"]: n for n in names if n in registry}
-    skip = {registry[a.me]["sessionId"]} if a.me in registry else set()
-
-    rows = [
-        (
-            "verdict",
-            "session",
-            "written",
-            "calls_after",
-            "last_active",
-            "project",
-            "path",
-            "title",
-        )
-    ]
-    seen = set()
+    found = {}
     for t in sorted(a.claude_dir.glob("projects/*/*.jsonl")):
         sid = t.stem
-        if not SESSION_ID.fullmatch(sid) or sid in skip:
+        if not SESSION_ID.fullmatch(sid):
             continue
         try:
             if datetime.fromtimestamp(t.stat().st_mtime).date() < a.date:
                 continue
         except OSError:
             continue
-        # work delegated to subagents and workflows counts towards staleness too
-        handoffs, calls = scan(
-            [t, *t.with_suffix("").glob("subagents/**/*.jsonl")], a.date
-        )
-        name = live.get(sid)
-        if name is None and not calls:
-            continue
-        seen.add(sid)
-        last = max(calls, default=None)
-        if handoffs:
-            latest = max(ts for ts, _ in handoffs.values())
-            after = sum(c > latest for c in calls)
-            verdict = (
-                ("fresh" if after <= STALE_AFTER else "stale") if name else "closed"
+        notes, work, entrypoint = scan(t, subagents(sid), a.date)
+        if str(entrypoint).startswith("sdk") and sid not in live:
+            continue  # automation (claude -p, the SDK), not someone's working session
+        found[sid] = (t, notes, work)
+    # a snapshot counts for the session it describes, not for the one that wrote it (this session
+    # included, which is then left out of the report)
+    for sid, (_, notes, _) in found.items():
+        for path in [
+            n
+            for n in notes
+            if (m := SNAPSHOT.search(n)) and not sid.startswith(m.group(1))
+        ]:
+            source = next(
+                (s for s in found if s.startswith(SNAPSHOT.search(path).group(1))), None
             )
-            for path, (ts, title) in sorted(handoffs.items(), key=lambda kv: kv[1][0]):
+            if source:
+                ts = notes.pop(path)
+                found[source][1][path] = max(ts, found[source][1].get(path, ts))
+    found.pop(me, None)
+
+    rows = [
+        "verdict session written calls_after last_active project path title".split()
+    ]
+    for sid, (t, notes, work) in found.items():
+        name = live.get(sid)
+        label, last = name or sid[:8], max(work, default=None)
+        titles = {n: note_title(n) for n in notes}
+        # notes that still exist and don't point elsewhere; only these count, so marking an old
+        # note superseded doesn't make the session look up to date
+        usable = {n: ts for n, ts in notes.items() if titles[n] is not None}
+        if usable:
+            latest = max(usable.values())
+            after = sum(w > latest for w in work)
+            stale = after > STALE_AFTER
+            verdict = (
+                ("stale" if stale else "fresh")
+                if name
+                else ("closed-stale" if stale else "closed")
+            )
+            listed = {n: ts for n, ts in usable.items() if dated_for(n, a.date)}
+            if not listed:
+                listed = {max(usable, key=usable.get): latest}
+            for n, ts in sorted(listed.items(), key=lambda kv: kv[1]):
+                title = titles[n].replace("\t", " ")
+                after_n = str(sum(w > ts for w in work))
                 rows.append(
                     (
                         verdict,
-                        name or sid[:8],
+                        label,
                         hhmm(ts),
-                        str(sum(c > ts for c in calls)),
+                        after_n,
                         hhmm(last),
                         t.parent.name,
-                        tilde(path),
-                        title.replace("\t", " "),
+                        tilde(n),
+                        title,
                     )
                 )
-        else:
+        elif len(work) >= MIN_WORK:
             rows.append(
                 (
                     "none" if name else "closed-none",
-                    name or sid[:8],
+                    label,
                     "-",
                     "-",
                     hhmm(last),
@@ -323,12 +377,6 @@ def main(argv=None):
                     "-",
                 )
             )
-
-    for n in names:
-        if n not in registry:
-            rows.append(("unknown", n, "-", "-", "-", "-", "-", "-"))
-        elif registry[n]["sessionId"] not in seen:
-            rows.append(("none", n, "-", "-", "-", "-", "-", "-"))
 
     print("\n".join("\t".join(r) for r in rows))
 
