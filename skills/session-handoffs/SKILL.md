@@ -38,7 +38,7 @@ At the end of a day with several Claude Code sessions, or the next morning. Run 
 python3 "${CLAUDE_SKILL_DIR}/scripts/handoff_status.py" [--date YYYY-MM-DD]
 ```
 
-It reads the registry and transcripts (read-only), leaves out this session, and prints one TSV row per note worth starting from (one row per session without one):
+It reads the registry and transcripts (read-only), leaves out this session, and prints one TSV row per note worth starting from (one row per session without one, and one per `replaced` snapshot):
 
 | verdict | meaning |
 |---|---|
@@ -122,7 +122,7 @@ Then, once every subagent has replied, this session alone writes the list and me
 
 - The check relies on Claude Code's local session registry and transcript format, which are not a documented interface. `claude agents --json` is documented, but lists no sessions inside Claude Code's Bash sandbox.
 - Notes are found through this machine's transcripts, from Write, Edit and NotebookEdit calls. A note written through the shell isn't found, and a synced note is listed only on the machine that wrote it.
-- A note is a `.md` file whose name contains "handoff" or that sits in a `handoff/` or `handoffs/` directory and has no "body" in its name (a PR or issue body), outside `memory/`, temp dirs and git worktrees. It is listed if it still exists, doesn't open with a SUPERSEDED banner (a line starting with the word, or a quoted `>` line containing it, after any frontmatter) or a `> COMPANION of <path>` line (a note kept on purpose beside another), and any date in its name falls between the day wrapped up and 3 days after it; otherwise the session's latest usable note is listed.
+- A note is a `.md` file whose name contains "handoff", or a dated one in a `handoff/` or `handoffs/` directory with no "body" in its name (a PR or issue body), outside `memory/`, temp dirs and git worktrees. It is listed if it still exists, doesn't open with a SUPERSEDED banner (a line starting with the word, or a quoted `>` line containing it, after any frontmatter) or a `> COMPANION of <path>` line (a note kept on purpose beside another), and any date in its name falls between the day wrapped up and 3 days after it; otherwise the session's latest usable note is listed.
 - A snapshot is `replaced` once the session's newest own note covers it (written after it, or at most 5 calls before it), even if that note is about other work.
 - A session whose first tool call runs the check script or loads this skill counts as a run of this skill: it is never listed as lacking a note, even if it did other work later, though its own notes and snapshots of it are listed. Run the skill in a fresh session.
 - A snapshot's freshness counts from when it was written, not from where its log ends: calls a busy session makes while the snapshot is being written count as covered.
