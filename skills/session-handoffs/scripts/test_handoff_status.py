@@ -206,6 +206,9 @@ class HandoffStatusTest(unittest.TestCase):
             self.note(
                 "handoff_2026-09-30_wednesday.md"
             ),  # written ahead for a later day
+            self.note(f"handoffs/{DAY}-actions.md"),  # in a handoffs/ directory
+            self.note("handoff_job-120260925.md"),  # build numbers, not dates
+            self.note("handoff_202609251.md"),
         ]
         not_listed = [
             self.note("memory/project-handoff.md"),  # memory pointer
@@ -215,6 +218,8 @@ class HandoffStatusTest(unittest.TestCase):
                 "handoff_aria-due-2026-10-09.md"
             ),  # a deadline, not the day it's for
             self.note("handoff_status.py"),  # not a note
+            self.note("session-handoffs/SKILL.md"),  # a directory named for handoffs
+            self.note("handoffs/run.py"),  # not a note
             str(self.dir / f"handoff_{DAY}_denied.md"),  # write never landed
             self.note(f"wt/handoff_{DAY}.md"),  # deleted with the worktree
         ]
@@ -298,6 +303,37 @@ class HandoffStatusTest(unittest.TestCase):
         rows = [(r["session"], r["verdict"], r["path"]) for r in self.report()]
         self.assertEqual(rows, [("bbbbbbbb", "closed", snapshot)])
 
+    def test_earlier_runs_of_the_report_are_left_out_and_their_snapshots_count(self):
+        snapshot = self.note(f"handoff_{DAY}_snapshot-bbbbbbbb.md", "# Snapshot")
+        self.session(1, "slash-run", sid("c"))  # opened with /session-handoffs
+        self.transcript(
+            sid("c"),
+            call("Bash", hour=9, command='python3 "/x/scripts/handoff_status.py"'),
+            *work(40, 9),
+            call("Write", snapshot, 10),
+        )
+        self.transcript(  # asked in words, so the skill was loaded by a tool call
+            sid("e"), call("Skill", hour=9, skill="session-handoffs"), *work(40, 9)
+        )
+        self.transcript(sid("b"), *work(40, 9))  # closed, described by the snapshot
+        self.transcript(  # a working session that ran the report late in the day
+            sid("a"),
+            call("Bash", hour=9, command="python3 scripts/test_handoff_status.py"),
+            *work(40, 9),
+            call("Bash", hour=18, command='python3 "/x/scripts/handoff_status.py"'),
+        )
+        self.assertEqual(
+            self.verdicts(), [("aaaaaaaa", "closed-none"), ("bbbbbbbb", "closed")]
+        )
+
+    def test_a_snapshot_goes_out_of_date_sooner_than_a_note(self):
+        snapshots = [self.note(f"handoff_{DAY}_snapshot-{c * 8}.md") for c in "ab"]
+        self.transcript(sid("d"), *[call("Write", s, 10) for s in snapshots])  # by "me"
+        for pid, c, calls in ((1, "a", 5), (2, "b", 6)):
+            self.session(pid, f"src-{c}", sid(c))
+            self.transcript(sid(c), *work(40, 9), *work(calls, 11))
+        self.assertEqual(self.verdicts(), [("src-a", "fresh"), ("src-b", "stale")])
+
     def test_two_running_sessions_with_the_same_name(self):
         self.session(1, "s", sid("a"))
         self.session(2, "s", sid("b"))
@@ -370,6 +406,13 @@ class HandoffStatusTest(unittest.TestCase):
                     'echo \'{"password": "hunter3"}\'',
                     "mysql --password hunter4",
                     'curl -H "Authorization: Basic dXNlcjpwYXNz" https://x',
+                    'curl -H "Authorization: Token tok123abc" https://x',
+                    "echo eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0In0.c2lnbmF0dXJl",
+                    "cat <<EOF -----BEGIN RSA PRIVATE KEY----- MIIEowIBAAKCAQ",
+                    "export GOOGLE=AIzaSyA1234567890abcdefghijklmnopqrstuv",
+                    "export S3_KEY=s3secretvalue",
+                    'curl "https://a.blob.core.windows.net/c?sv=2020&sig=sasSIGvalue"',
+                    "ssh 203.0.113.7 uptime",
                 )
             ],
             tool_output("SECRET_TOKEN=abc123", 11),
@@ -406,8 +449,23 @@ class HandoffStatusTest(unittest.TestCase):
             "hunter4",
             "dXNlcjpwYXNz",
             "SECRET_TOKEN",
+            "tok123abc",
+            "eyJhbGci",
+            "MIIEow",
+            "AIzaSyA",
+            "s3secretvalue",
+            "sasSIGvalue",
+            "203.0.113.7",
         ):
             self.assertNotIn(text, out)
+
+    def test_digest_refuses_an_id_prefix_shared_by_two_sessions(self):
+        self.transcript(sid("a"), *work(3))
+        self.transcript("aaaaaaaa-bbbb-bbbb-bbbb-bbbbbbbbbbbb", *work(3))
+        with self.assertRaisesRegex(SystemExit, "matches 2 sessions"):
+            self.run_cli("--digest", "aaaaaaaa")
+        # a longer prefix still finds one
+        self.assertIn("latest note: none", self.run_cli("--digest", "aaaaaaaa-aaaa"))
 
     def test_digest_by_sid8_keeps_the_most_recent_part(self):
         self.transcript(

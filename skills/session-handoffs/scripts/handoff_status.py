@@ -5,14 +5,17 @@ Read-only and safe to re-run. Running sessions come from the registry (<config>/
 each session's transcript (<config>/projects/*/<sessionId>.jsonl, plus its subagents' under
 projects/*/<sessionId>/subagents/) records every Write and Edit with its file path and time.
 Neither is a documented interface. <config> is $CLAUDE_CONFIG_DIR, else ~/.claude. The session
-running this ($CLAUDE_CODE_SESSION_ID) is left out.
+running this ($CLAUDE_CODE_SESSION_ID) is left out, and so is any session opened to run this
+report (its first tool call runs this script or loads the skill).
 
 The window runs from the start of --date to now. --date defaults to 5 hours ago, so a run
 shortly after midnight still covers the evening.
 
-A note is a .md file whose name contains "handoff", outside memory/, temp dirs and git worktrees.
+A note is a .md file whose name contains "handoff", or that sits in a handoff(s)/ directory,
+outside memory/, temp dirs and git worktrees.
 - Out of date: a session is stale when, after its latest write to a note, it made more than 30
-  tool calls in its main conversation or file edits through its subagents.
+  tool calls in its main conversation or file edits through its subagents. More than 5 for a
+  snapshot, which can't know what came after it.
 - Listed: its notes that still exist, don't open with a SUPERSEDED banner, and have any date in
   their name between --date and 3 days after it. If none qualify, its latest usable note. A
   snapshot named ..._snapshot-<sid8>.md counts for the session it describes, not its writer.
@@ -26,7 +29,8 @@ report) are left out.
 
 --digest NAME|SID8 instead prints that session's latest note, the path for its snapshot (in the
 project dir of the session running this), and a compact log of its window: prompts, Claude's
-messages, one line per tool call, no tool output, secrets masked.
+messages, one line per tool call, no tool output, common secret shapes and IPv4 addresses masked
+(best effort: a password written in prose gets through).
 """
 
 import argparse
@@ -39,11 +43,12 @@ from pathlib import Path
 SESSION_ID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 TEMP_ROOTS = ("/tmp/", "/private/tmp/", "/var/folders/", "/private/var/folders/")
 STALE_AFTER = 30  # work after the latest note that makes it out of date
+SNAPSHOT_STALE_AFTER = 5  # a snapshot can't know what came after it
 MIN_WORK = 30  # below this, a session without a note is not worth reporting
 # a note may be named for a day up to this far ahead (written on Friday for Monday)
 AHEAD_DAYS = 3
 FILE_TOOLS = ("Write", "Edit", "NotebookEdit")
-NAME_DATE = re.compile(r"(20\d\d)[-_]?([01]\d)[-_]?([0-3]\d)")
+NAME_DATE = re.compile(r"(?<!\d)(20\d\d)[-_]?([01]\d)[-_]?([0-3]\d)(?!\d)")
 SNAPSHOT = re.compile(r"snapshot-([0-9a-f]{8})\.md$")
 # a line that opens with the word, maybe after a date, and says what replaced it:
 # "> ⏭️ **SUPERSEDED by x.md**", "> **2026-09-28: superseded. START AT …**", "SUPERSEDED 2026-09-24 → x".
@@ -53,12 +58,24 @@ BANNER = re.compile(
     re.I,
 )
 SECRET = re.compile(
-    r"(?i:((?:bearer|basic)\s+"
-    r"|[\w-]*(?:token|passw(?:or)?d|secret|api[_-]?key|access[_-]?key|credential)[\w-]*[\"']?\s*[=:]\s*[\"']?"
-    r"|--[\w-]*(?:token|password|secret|key)[\w-]* +))[^\s\"',}]+"
-    r"|\b(?:ghp_|gho_|ghs_|ghu_|github_pat_|sk-|xox[abprs]-)[A-Za-z0-9_-]{10,}"
-    r"|\bAKIA[0-9A-Z]{16}\b"
-    r"|(?<=://)[^/\s:@]+:[^/\s@]+(?=@)"
+    "|".join(
+        (
+            # a value after its label, which is kept: "Bearer x", "Authorization: Token x",
+            # "TOKEN=x", "S3_KEY: x", "--password x"
+            r"(?i:((?:bearer|basic)\s+|authorization:\s*\w+\s+"
+            r"|[\w-]*(?:token|passw(?:or)?d|secret|(?:api|access|[_-])key|credential)[\w-]*[\"']?\s*[=:]\s*[\"']?"
+            r"|--[\w-]*(?:token|password|secret|key)[\w-]* +))[^\s\"',}]+",
+            # values recognisable by their shape
+            r"\b(?:ghp_|gho_|ghs_|ghu_|github_pat_|sk-|xox[abprs]-)[A-Za-z0-9_-]{10,}",
+            r"\bAKIA[0-9A-Z]{16}\b",
+            r"\bAIza[\w-]{35}",  # Google API key
+            r"\beyJ[\w-]{8,}\.[\w-]{8,}\.[\w-]*",  # JWT
+            r"-----BEGIN [A-Z ]*PRIVATE KEY-----[^-]*",
+            r"(?<=[?&])sig=[^&\s\"']+",  # signed URL (Azure SAS)
+            r"(?<=://)[^/\s:@]+:[^/\s@]+(?=@)",  # user:password@ in a URL
+            r"(?<![\w.])(?:\d{1,3}\.){3}\d{1,3}\b(?!\.\d)",  # IPv4 address
+        )
+    )
 )
 DIGEST_CHARS = 25_000  # under Claude Code's default Bash output cap (30k characters)
 
@@ -108,10 +125,10 @@ def in_worktree(path):
 
 
 def is_note(path):
-    name = Path(path).name.lower()
+    p = Path(path.lower())
     return (
-        "handoff" in name
-        and name.endswith(".md")
+        ("handoff" in p.name or p.parent.name in ("handoff", "handoffs"))
+        and p.name.endswith(".md")
         and "/memory/" not in path
         and not path.startswith(TEMP_ROOTS)
         and not in_worktree(path)
@@ -206,21 +223,31 @@ def digest(transcript, since):
     return text
 
 
+def runs_this_report(block):
+    """True if a session's first tool call runs this script or loads this skill: the session was
+    opened to run the report, so its calls aren't work."""
+    i = block.get("input") or {}
+    return "/handoff_status.py" in str(i.get("command")) or str(i.get("skill")).endswith(
+        "session-handoffs"
+    )
+
+
 def scan(transcript, subagents, day):
-    """Return ({note path: last write time}, [work times], entrypoint) from the start of `day`.
+    """Return ({note path: last write time}, [work times], first) from the start of `day`.
     Work is every tool call in the main conversation plus file edits by subagents: their reads are
-    noise, their edits (new worktrees, files) are what a handoff must mention. The entrypoint
-    (cli, sdk-py, …) tells an interactive session from automation."""
-    notes, work, entrypoint = {}, [], None
+    noise, their edits (new worktrees, files) are what a handoff must mention. `first` is the main
+    conversation's first tool call, with the entrypoint (cli, sdk-py, …) of its entry, which tells
+    an interactive session from automation."""
+    notes, work, first = {}, [], None
     for f in (transcript, *subagents):
         for ts, entry in entries(f, start_of(day), needle='"tool_use"'):
             if entry.get("type") != "assistant":
                 continue
-            if f is transcript and entrypoint is None:
-                entrypoint = entry.get("entrypoint")
             for block in (entry.get("message") or {}).get("content") or []:
                 if not isinstance(block, dict) or block.get("type") != "tool_use":
                     continue
+                if f is transcript and first is None:
+                    first = dict(block, entrypoint=entry.get("entrypoint"))
                 i = block.get("input") or {}
                 path = str(i.get("file_path") or i.get("notebook_path") or "")
                 edit = block.get("name") in FILE_TOOLS
@@ -228,7 +255,7 @@ def scan(transcript, subagents, day):
                     notes[path] = max(ts, notes.get(path, ts))
                 if f is transcript or (edit and not path.startswith(TEMP_ROOTS)):
                     work.append(ts)
-    return notes, work, entrypoint
+    return notes, work, first or {}
 
 
 def main(argv=None):
@@ -272,9 +299,16 @@ def main(argv=None):
         sid = next((s for s, n in live.items() if n == a.digest), None)
         if sid is None and re.fullmatch(r"[0-9a-f-]{8,36}", a.digest):
             sid = a.digest + "*"
-        t = next(a.claude_dir.glob(f"projects/*/{sid}.jsonl"), None) if sid else None
-        if t is None or not SESSION_ID.fullmatch(t.stem):
+        matches = {
+            t.stem: t
+            for t in (a.claude_dir.glob(f"projects/*/{sid}.jsonl") if sid else ())
+            if SESSION_ID.fullmatch(t.stem)
+        }
+        if len(matches) > 1:
+            raise SystemExit(f"{a.digest}: matches {len(matches)} sessions, give more of the id")
+        if not matches:
             raise SystemExit(f"{a.digest}: no transcript found")
+        (t,) = matches.values()
         notes, _, _ = scan(t, subagents(t.stem), a.date)
         # its own notes, not the snapshots it wrote about other sessions
         about = {n: SNAPSHOT.search(n) for n in notes}
@@ -297,7 +331,7 @@ def main(argv=None):
         print(digest(t, start_of(a.date)))
         return
 
-    found = {}
+    found, reports = {}, {me}
     for t in sorted(a.claude_dir.glob("projects/*/*.jsonl")):
         sid = t.stem
         if not SESSION_ID.fullmatch(sid):
@@ -307,25 +341,25 @@ def main(argv=None):
                 continue
         except OSError:
             continue
-        notes, work, entrypoint = scan(t, subagents(sid), a.date)
-        if str(entrypoint).startswith("sdk") and sid not in live:
+        notes, work, first = scan(t, subagents(sid), a.date)
+        if str(first.get("entrypoint")).startswith("sdk") and sid not in live:
             continue  # automation (claude -p, the SDK), not someone's working session
+        if runs_this_report(first):
+            reports.add(sid)
         found[sid] = (t, notes, work)
     # a snapshot counts for the session it describes, not for the one that wrote it (this session
-    # included, which is then left out of the report)
+    # and earlier runs of this report included, which are then left out)
     for sid, (_, notes, _) in found.items():
-        for path in [
-            n
-            for n in notes
-            if (m := SNAPSHOT.search(n)) and not sid.startswith(m.group(1))
-        ]:
-            source = next(
-                (s for s in found if s.startswith(SNAPSHOT.search(path).group(1))), None
-            )
+        for path in list(notes):
+            m = SNAPSHOT.search(path)
+            if not m or sid.startswith(m.group(1)):
+                continue
+            source = next((s for s in found if s.startswith(m.group(1))), None)
             if source:
                 ts = notes.pop(path)
                 found[source][1][path] = max(ts, found[source][1].get(path, ts))
-    found.pop(me, None)
+    for sid in reports:
+        found.pop(sid, None)
 
     rows = [
         "verdict session written calls_after last_active project path title".split()
@@ -338,9 +372,10 @@ def main(argv=None):
         # note superseded doesn't make the session look up to date
         usable = {n: ts for n, ts in notes.items() if titles[n] is not None}
         if usable:
-            latest = max(usable.values())
+            newest = max(usable, key=usable.get)
+            latest = usable[newest]
             after = sum(w > latest for w in work)
-            stale = after > STALE_AFTER
+            stale = after > (SNAPSHOT_STALE_AFTER if SNAPSHOT.search(newest) else STALE_AFTER)
             verdict = (
                 ("stale" if stale else "fresh")
                 if name
@@ -348,7 +383,7 @@ def main(argv=None):
             )
             listed = {n: ts for n, ts in usable.items() if dated_for(n, a.date)}
             if not listed:
-                listed = {max(usable, key=usable.get): latest}
+                listed = {newest: latest}
             for n, ts in sorted(listed.items(), key=lambda kv: kv[1]):
                 title = titles[n].replace("\t", " ")
                 after_n = str(sum(w > ts for w in work))
