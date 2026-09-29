@@ -29,10 +29,10 @@ verdict: fresh | stale | none                (running sessions)
          replaced: a snapshot its session's own note covers; title is that note's path
 Sessions without a note that made fewer than 30 calls (a quick question) are left out.
 
---digest NAME|SID8 instead prints that session's latest note, the path for its snapshot (in the
-project dir of the session running this), and a compact log of its window: prompts, Claude's
-messages, one line per tool call, no tool output, common secret shapes and IPv4 addresses masked
-(best effort: a password written in prose gets through).
+--digest NAME|SID8 instead prints that session's latest note, the path for its snapshot (in
+--notes-dir if given, else the project dir of the session running this), and a compact log of its
+window: prompts, Claude's messages, one line per tool call, no tool output, common secret shapes
+and IPv4 addresses masked (best effort: a password written in prose gets through).
 """
 
 import argparse
@@ -302,6 +302,11 @@ def main(argv=None):
         help="print a session's latest note and a compact log of its day",
     )
     p.add_argument(
+        "--notes-dir",
+        type=lambda s: Path(s).expanduser(),  # the model may pass a quoted "~/…"
+        help="folder for the --digest snapshot",
+    )
+    p.add_argument(
         "--claude-dir",
         type=Path,
         default=Path(
@@ -361,6 +366,15 @@ def main(argv=None):
         if not matches:
             raise SystemExit(f"{a.digest}: no transcript found")
         (t,) = matches.values()
+        own = next(a.claude_dir.glob(f"projects/*/{me}.jsonl"), None) if me else None
+        snapshot = (a.notes_dir or (own or t).parent) / (
+            f"handoff_{a.date}_snapshot-{t.stem[:8]}.md"
+        )
+        # the script doesn't create the folder; a snapshot the check can't find would never count
+        if a.notes_dir and not (a.notes_dir.is_dir() and is_note(str(snapshot))):
+            raise SystemExit(
+                f"--notes-dir {tilde(str(a.notes_dir))}: no such folder, or notes in it aren't found (memory/, temp dirs, git worktrees)"
+            )
         # an empty log would make an empty snapshot: a format change, or nothing in the window
         log = digest(t, start_of(a.date))
         if not log:
@@ -383,8 +397,6 @@ def main(argv=None):
             )
         else:
             print(f"latest note: none since {a.date}")
-        own = next(a.claude_dir.glob(f"projects/*/{me}.jsonl"), None) if me else None
-        snapshot = (own or t).parent / f"handoff_{a.date}_snapshot-{t.stem[:8]}.md"
         print(f"snapshot: {tilde(str(snapshot))}")
         print(log)
         return

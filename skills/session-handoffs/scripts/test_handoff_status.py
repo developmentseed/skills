@@ -629,6 +629,22 @@ class HandoffStatusTest(unittest.TestCase):
         with self.assertRaisesRegex(SystemExit, "nothing since .* could be read"):
             self.run_cli("--digest", "aaaaaaaa")
 
+    def test_digest_puts_the_snapshot_in_the_notes_dir(self):
+        self.transcript(sid("a"), *work(3))
+        (self.dir / "vault" / "handoffs").mkdir(parents=True)
+        (self.dir / "memory").mkdir()
+        run = ("--digest", "aaaaaaaa", "--notes-dir")
+        with mock.patch.dict(os.environ, HOME=str(self.dir)):
+            out = self.run_cli(*run, "~/vault/handoffs")
+            # never created, and never where the check can't find it
+            for bad in ("~/missing", "~/memory"):
+                with self.assertRaisesRegex(SystemExit, "--notes-dir", msg=bad):
+                    self.run_cli(*run, bad)
+        snapshot = (
+            self.dir / "vault" / "handoffs" / f"handoff_{DAY}_snapshot-aaaaaaaa.md"
+        )
+        self.assertIn(f"snapshot: {snapshot}\n", out)
+
     def test_digest_by_sid8_keeps_the_most_recent_part(self):
         self.transcript(
             sid("a"),

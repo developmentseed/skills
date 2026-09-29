@@ -18,6 +18,7 @@ At the end of a day with several Claude Code sessions, or the next morning. Run 
 - Optional: a daily note. Add one line to your `~/.claude/CLAUDE.md` naming the file and the heading, for example:
   `session-handoffs daily note: ~/notes/daily/{date}.md, heading "## For Tomorrow"`
   Without it, the list is printed instead.
+- Optional: a notes folder, set the same way: `session-handoffs notes: ~/notes/handoffs`. Snapshots and requested notes then go there instead of `~/.claude/projects/<project>/`.
 
 ## Arguments
 
@@ -76,12 +77,12 @@ Nothing is pending after this: re-run the skill any time to pick up new notes.
 2. Send one `SendMessage` with the request below, and no `notify_when_idle`. Don't wait for anything. If the result says the message is held for approval, tell the user.
 3. Re-run step 1 later to pick up the note.
 
-The request is plain text (an `@path` or a `/command` inside it does nothing). Its first line is the preview shown in that terminal. Fill in `<me>`, `<date>` and `<snapshots>` (the snapshot paths in its rows; drop that line if none):
+The request is plain text (an `@path` or a `/command` inside it does nothing). Its first line is the preview shown in that terminal. Fill in `<me>`, `<date>`, `<notes>` (the notes folder if one is set, else "the directory that holds your memory/ directory (~/.claude/projects/<project>/)") and `<snapshots>` (the snapshot paths in its rows; drop that line if none):
 
 ```text
 End-of-day handoff request from <me> (/session-handoffs): please make sure the work in this session has a current handoff note.
 - If the note you are working from (your own, or the one you resumed from) is still current, do nothing.
-- Otherwise update that note with Edit, changing only what changed, or write a new one named handoff_<date>_<topic>.md in the directory that holds your memory/ directory (~/.claude/projects/<project>/). Never in a git worktree, the session scratchpad or /tmp: those get deleted. Don't edit notes about other work.
+- Otherwise update that note with Edit, changing only what changed, or write a new one named handoff_<date>_<topic>.md in <notes>. Never in a git worktree, the session scratchpad or /tmp: those get deleted. Don't edit notes about other work.
 - Snapshots of this session that /session-handoffs wrote: <snapshots>. Your own note supersedes them: never edit one.
 - Make it self-contained for a fresh session with no context: one-line status; current state; ordered next steps starting with a concrete first action; decisions waiting on the user; traps; branches, PRs, worktrees and paths; how to resume.
 - Write from what you already know: at most a quick git status or gh pr view. Link PRs and issues, don't paste them.
@@ -91,7 +92,7 @@ End-of-day handoff request from <me> (/session-handoffs): please make sure the w
 
 ### 5. `--from-transcript NAME|SID8`: a snapshot from the transcript
 
-1. Run `python3 "${CLAUDE_SKILL_DIR}/scripts/handoff_status.py" --digest '<name or sid8>'`, with the same `--date`. It prints the session's latest note, the snapshot path (in this session's project directory), and a compact log of its day: the user's prompts, Claude's messages, messages from other sessions, and one line per tool call, without tool output and with common secret shapes and IPv4 addresses masked.
+1. Run `python3 "${CLAUDE_SKILL_DIR}/scripts/handoff_status.py" --digest '<name or sid8>'`, with the same `--date`, and `--notes-dir '<folder>'` if a notes folder is set. If that folder is missing, it stops: tell the user, don't create it. It prints the session's latest note, the snapshot path, and a compact log of its day: the user's prompts, Claude's messages, messages from other sessions, and one line per tool call, without tool output and with common secret shapes and IPv4 addresses masked.
 2. Read the latest note if there is one. Then write the snapshot at the printed path, replacing it if it already exists, opening with:
    `> Snapshot written by /session-handoffs from <name or sid8>'s transcript at <HH:MM>. That session has not reviewed it. Its own last note: <path, or none>.`
    If the log opens with `[… earlier lines omitted]`, add to that line: `The log was cut: work before <time of its first line> is missing.`
@@ -103,7 +104,7 @@ End-of-day handoff request from <me> (/session-handoffs): please make sure the w
 ## Limits
 
 - The check relies on Claude Code's local session registry and transcript format, which are not a documented interface. `claude agents --json` is documented, but lists no sessions inside Claude Code's Bash sandbox.
-- Only Write, Edit and NotebookEdit calls are seen. A note written through the shell isn't detected.
+- Notes are found through this machine's transcripts, from Write, Edit and NotebookEdit calls. A note written through the shell isn't found, and a synced note is listed only on the machine that wrote it.
 - A note is a `.md` file whose name contains "handoff" or that sits in a `handoff/` or `handoffs/` directory and has no "body" in its name (a PR or issue body), outside `memory/`, temp dirs and git worktrees. It is listed if it still exists, doesn't open with a SUPERSEDED banner (a line starting with the word, or a quoted `>` line containing it, after any frontmatter) or a `> COMPANION of <path>` line (a note kept on purpose beside another), and any date in its name falls between the day wrapped up and 3 days after it; otherwise the session's latest usable note is listed.
 - A snapshot is `replaced` once the session's newest own note covers it (written after it, or at most 5 calls before it), even if that note is about other work.
 - A session whose first tool call runs the check script or loads this skill counts as a run of this skill: it is never listed as lacking a note, even if it did other work later, though its own notes and snapshots of it are listed. Run the skill in a fresh session.
