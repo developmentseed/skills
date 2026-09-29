@@ -20,7 +20,7 @@ At the end of a day with several Claude Code sessions, or the next morning. Run 
   Without it, the list is printed instead.
 - Optional: a notes folder, set the same way: `session-handoffs notes: ~/notes/handoffs`. Snapshots and requested notes then go there instead of `~/.claude/projects/<project>/`.
 - Recommended: add the rule that `--ask` sends (step 4) to your `~/.claude/CLAUDE.md`, so a session asked for a note puts it where it lasts:
-  `Handoff notes: when asked for one, update the note you work from with Edit, changing only what changed, or write a new one named handoff_<date>_<topic>.md in the directory that holds your memory/ directory (~/.claude/projects/<project>/). Never in a git worktree, the session scratchpad or /tmp: those get deleted.`
+  `Handoff notes: when asked for one, update the note you work from with Edit, changing only what changed, or write a new one named handoff_<date>_<topic>.md in the session-handoffs notes folder if set, else the directory that holds your memory/ directory (~/.claude/projects/<project>/). Never in a git worktree, the session scratchpad or /tmp: those get deleted.`
   Without notes, the report offers snapshots instead.
 
 ## Arguments
