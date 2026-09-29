@@ -592,6 +592,43 @@ class HandoffStatusTest(unittest.TestCase):
         # a longer prefix still finds one
         self.assertIn("latest note: none", self.run_cli("--digest", "aaaaaaaa-aaaa"))
 
+    def test_a_quiet_day_or_a_new_install_is_not_an_error(self):
+        (self.dir / "projects").mkdir()  # no transcript yet
+        self.assertEqual(self.report(), [])
+        self.session(1, "me", sid("d"))  # the registry holds only this session
+        self.transcript(sid("d"), call("Bash"))  # its call running the report
+        self.transcript(sid("a"), *work(3))  # a quick question
+        self.transcript(sid("b"), say("user", "hi", 9), say("assistant", "hello", 9))
+        self.assertEqual(self.report(), [])
+
+    def test_no_projects_dir_is_an_error(self):
+        with self.assertRaisesRegex(SystemExit, "projects not found"):
+            self.run_cli()
+
+    def test_a_registry_without_session_ids_is_an_error(self):
+        # the key was renamed, or the file is no longer an object
+        (self.dir / "sessions" / "1.json").write_text(json.dumps({"id": sid("a")}))
+        (self.dir / "sessions" / "2.json").write_text("[]")
+        self.transcript(sid("a"), *work(40))
+        with self.assertRaisesRegex(SystemExit, "no sessionId in"):
+            self.run_cli()
+
+    def renamed_timestamps(self):
+        # a format change: every line is skipped, this session's own included
+        c = {"time" if k == "timestamp" else k: v for k, v in call("Bash").items()}
+        self.transcript(sid("d"), c)
+        self.transcript(sid("a"), *[c] * 40)
+
+    def test_unreadable_transcripts_are_an_error_not_an_empty_report(self):
+        self.renamed_timestamps()
+        with self.assertRaisesRegex(SystemExit, "no tool call could be read"):
+            self.run_cli()
+
+    def test_an_empty_digest_is_an_error_not_an_empty_snapshot(self):
+        self.renamed_timestamps()
+        with self.assertRaisesRegex(SystemExit, "nothing since .* could be read"):
+            self.run_cli("--digest", "aaaaaaaa")
+
     def test_digest_by_sid8_keeps_the_most_recent_part(self):
         self.transcript(
             sid("a"),

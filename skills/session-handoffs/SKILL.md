@@ -102,7 +102,7 @@ End-of-day handoff request from <me> (/session-handoffs): please make sure the w
 
 ## Limits
 
-- The check relies on Claude Code's local session registry and transcript format, which are not a documented interface.
+- The check relies on Claude Code's local session registry and transcript format, which are not a documented interface. `claude agents --json` is documented, but lists no sessions inside Claude Code's Bash sandbox.
 - Only Write, Edit and NotebookEdit calls are seen. A note written through the shell isn't detected.
 - A note is a `.md` file whose name contains "handoff" or that sits in a `handoff/` or `handoffs/` directory and has no "body" in its name (a PR or issue body), outside `memory/`, temp dirs and git worktrees. It is listed if it still exists, doesn't open with a SUPERSEDED banner (a line starting with the word, or a quoted `>` line containing it, after any frontmatter) or a `> COMPANION of <path>` line (a note kept on purpose beside another), and any date in its name falls between the day wrapped up and 3 days after it; otherwise the session's latest usable note is listed.
 - A snapshot is `replaced` once the session's newest own note covers it (written after it, or at most 5 calls before it), even if that note is about other work.

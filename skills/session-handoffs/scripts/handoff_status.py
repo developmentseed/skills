@@ -4,9 +4,10 @@
 Read-only and safe to re-run. Running sessions come from the registry (<config>/sessions/*.json);
 each session's transcript (<config>/projects/*/<sessionId>.jsonl, plus its subagents' under
 projects/*/<sessionId>/subagents/) records every Write and Edit with its file path and time.
-Neither is a documented interface. <config> is $CLAUDE_CONFIG_DIR, else ~/.claude. The session
-running this ($CLAUDE_CODE_SESSION_ID) is left out. A session opened to run this report (its
-first tool call runs this script or loads the skill) is never reported as lacking a note.
+Neither is a documented interface: if they can't be read, it exits with an error rather than print
+an empty report. <config> is $CLAUDE_CONFIG_DIR, else ~/.claude. The session running this
+($CLAUDE_CODE_SESSION_ID) is left out. A session opened to run this report (its first tool call
+runs this script or loads the skill) is never reported as lacking a note.
 
 The window runs from the start of --date to now. --date defaults to 5 hours ago, so a run
 shortly after midnight still covers the evening.
@@ -310,15 +311,30 @@ def main(argv=None):
     a = p.parse_args(argv)
     me = os.environ.get("CLAUDE_CODE_SESSION_ID")
 
-    live = {}  # running interactive sessions: session id -> name
-    for f in (a.claude_dir / "sessions").glob("*.json"):
+    projects = a.claude_dir / "projects"
+    if not projects.is_dir():
+        raise SystemExit(
+            f"{tilde(str(projects))} not found: "
+            "set CLAUDE_CONFIG_DIR if Claude Code keeps its data elsewhere"
+        )
+
+    # not `claude agents --json`, documented but empty inside Claude Code's Bash sandbox
+    live, registered = {}, False  # running interactive sessions: session id -> name
+    registry = list((a.claude_dir / "sessions").glob("*.json"))
+    for f in registry:
         try:
             s = json.loads(f.read_text())
-        except (OSError, ValueError):
+            sid = s.get("sessionId")
+        except (OSError, ValueError, AttributeError):
             continue
-        sid = s.get("sessionId")
+        registered = registered or bool(sid)
         if sid and sid != me and s.get("kind", "interactive") == "interactive":
             live[sid] = s.get("name") or sid[:8]
+    if registry and not registered:
+        raise SystemExit(
+            f"no sessionId in {tilde(str(registry[0].parent))}/*.json: "
+            "Claude Code's session registry may have changed"
+        )
 
     def subagents(sid):
         return list(a.claude_dir.glob(f"projects/*/{sid}/subagents/**/*.jsonl"))
@@ -345,6 +361,12 @@ def main(argv=None):
         if not matches:
             raise SystemExit(f"{a.digest}: no transcript found")
         (t,) = matches.values()
+        # an empty log would make an empty snapshot: a format change, or nothing in the window
+        log = digest(t, start_of(a.date))
+        if not log:
+            raise SystemExit(
+                f"{a.digest}: nothing since {a.date} could be read from its transcript"
+            )
         notes, _, _ = scan(t, subagents(t.stem), a.date)
         # its own notes, not the snapshots it wrote about other sessions
         about = {n: SNAPSHOT.search(n) for n in notes}
@@ -364,10 +386,11 @@ def main(argv=None):
         own = next(a.claude_dir.glob(f"projects/*/{me}.jsonl"), None) if me else None
         snapshot = (own or t).parent / f"handoff_{a.date}_snapshot-{t.stem[:8]}.md"
         print(f"snapshot: {tilde(str(snapshot))}")
-        print(digest(t, start_of(a.date)))
+        print(log)
         return
 
     found, reports, credited = {}, set(), set()
+    changed = calls = 0  # transcripts written in the window, tool calls read from them
     for t in sorted(a.claude_dir.glob("projects/*/*.jsonl")):
         sid = t.stem
         if not SESSION_ID.fullmatch(sid):
@@ -378,11 +401,19 @@ def main(argv=None):
         except OSError:
             continue
         notes, work, entrypoint = scan(t, subagents(sid), a.date)
+        changed, calls = changed + 1, calls + len(work)
         if str(entrypoint).startswith("sdk") and sid not in live:
             continue  # automation (claude -p, the SDK), not someone's working session
         if opened_for_report(t):
             reports.add(sid)  # its calls ran the report: not work that needs a note
         found[sid] = (t, notes, work)
+    # counted before this session is left out: run from a session, its own call to this script is
+    # in the window, so a format this script can read always has one
+    if changed and not calls:
+        raise SystemExit(
+            f"no tool call could be read from the transcripts changed since {a.date}: "
+            "Claude Code's transcript format may have changed"
+        )
     # a snapshot counts for the session it describes, not for the one that wrote it (this session
     # included, which is then left out of the report)
     for sid, (_, notes, _) in found.items():
