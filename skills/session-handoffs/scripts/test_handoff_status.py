@@ -113,6 +113,10 @@ class HandoffStatusTest(unittest.TestCase):
         return out.getvalue()
 
     def report(self):
+        # run from a session, as in use: its call to the script is in its transcript
+        me = os.environ.get("CLAUDE_CODE_SESSION_ID")
+        if me and not any(self.dir.glob(f"projects/*/{me}.jsonl")):
+            self.transcript(me, call("Bash"))
         header, *rows = [line.split("\t") for line in self.run_cli().splitlines()]
         return [dict(zip(header, r)) for r in rows]
 
@@ -594,12 +598,16 @@ class HandoffStatusTest(unittest.TestCase):
         self.assertIn("latest note: none", self.run_cli("--digest", "aaaaaaaa-aaaa"))
 
     def test_a_quiet_day_or_a_new_install_is_not_an_error(self):
-        (self.dir / "projects").mkdir()  # no transcript yet
-        self.assertEqual(self.report(), [])
+        (self.dir / "projects").mkdir()  # no transcript yet, run from a terminal
+        with mock.patch.dict(os.environ, CLAUDE_CODE_SESSION_ID=""):
+            self.assertEqual(self.report(), [])
         self.session(1, "me", sid("d"))  # the registry holds only this session
-        self.transcript(sid("d"), call("Bash"))  # its call running the report
-        self.transcript(sid("a"), *work(3))  # a quick question
+        self.transcript(sid("d"), call("Bash"))  # the report: the only tool call
         self.transcript(sid("b"), say("user", "hi", 9), say("assistant", "hello", 9))
+        self.assertEqual(self.report(), [])
+        # run from a subagent: its call counts, though the session's own calls are older
+        self.transcript(sid("d"), call("Agent", day="2026-09-27"))
+        self.transcript(sid("d"), call("Bash"), sub="agent-1")
         self.assertEqual(self.report(), [])
 
     def test_no_projects_dir_is_an_error(self):
@@ -613,6 +621,10 @@ class HandoffStatusTest(unittest.TestCase):
         self.transcript(sid("a"), *work(40))
         with self.assertRaisesRegex(SystemExit, "no sessionId in"):
             self.run_cli()
+        # one that isn't a session, beside ones that are, is skipped
+        self.session(0, "s", sid("a"))
+        (self.dir / "sessions" / "3.json").write_text(json.dumps({"pid": 3}))
+        self.assertEqual(self.verdicts(), [("s", "none")])
 
     def renamed_timestamps(self):
         # a format change: every line is skipped, this session's own included
@@ -622,8 +634,30 @@ class HandoffStatusTest(unittest.TestCase):
 
     def test_unreadable_transcripts_are_an_error_not_an_empty_report(self):
         self.renamed_timestamps()
+        self.transcript(sid("b"), *work(40))  # started before an update: the old format
         with self.assertRaisesRegex(SystemExit, "no tool call could be read"):
             self.run_cli()
+
+    def test_moved_transcripts_are_an_error_not_an_empty_report(self):
+        # a layout change: each transcript one folder down, this session's own included
+        for c in "ad":
+            self.transcript("main", *work(40), project=f"-proj/{sid(c)}")
+        self.transcript(sid("b"), *work(40))  # started before an update: the old layout
+        with self.assertRaisesRegex(SystemExit, "this session's transcript isn't in"):
+            self.run_cli()
+
+    def test_run_from_a_terminal_a_window_without_a_tool_call_is_an_error(self):
+        # without a session of its own to look at, a renamed tool call in lines that still read
+        # looks like a day of chats alone: the error names both
+        c = call("Bash")
+        c["message"]["content"][0]["type"] = "tool_call"
+        self.transcript(sid("a"), *[c] * 40)
+        self.transcript(sid("b"), say("user", "hi", 9), say("assistant", "hello", 9))
+        with mock.patch.dict(os.environ, CLAUDE_CODE_SESSION_ID=""):
+            with self.assertRaisesRegex(
+                SystemExit, "format may have changed, or no session used a tool"
+            ):
+                self.run_cli()
 
     def test_an_empty_digest_is_an_error_not_an_empty_snapshot(self):
         self.renamed_timestamps()

@@ -5,10 +5,11 @@ Read-only and safe to re-run. Running sessions come from the registry (<config>/
 each session's transcript (<config>/projects/*/<sessionId>.jsonl, plus its subagents' under
 projects/*/<sessionId>/subagents/) records every Write, Edit and NotebookEdit with its file path
 and time. Neither is a documented interface: if they can't be read, it exits with an error rather
-than print an empty report. <config> is $CLAUDE_CONFIG_DIR, else ~/.claude. The session running
-this ($CLAUDE_CODE_SESSION_ID) is left out, and so is automation (claude -p, the SDK) that is no
-longer running. A session opened to run this report (its first tool call runs this script or
-loads the skill) is never reported as lacking a note.
+than print an empty report. Run from a terminal, it can't tell that from a window in which no
+session used a tool, and exits with an error for both. <config> is $CLAUDE_CONFIG_DIR, else
+~/.claude. The session running this ($CLAUDE_CODE_SESSION_ID) is left out, and so is automation
+(claude -p, the SDK) that is no longer running. A session opened to run this report (its first
+tool call runs this script or loads the skill) is never reported as lacking a note.
 
 The window runs from the start of --date to now. --date defaults to 5 hours ago, so a run
 shortly after midnight still covers the evening.
@@ -271,11 +272,11 @@ def opened_for_report(transcript):
 
 
 def scan(transcript, subagents, day):
-    """Return ({note path: last write time}, [work times], entrypoint) from the start of `day`.
-    Work is every tool call in the main conversation plus file edits by subagents: their reads are
-    noise, their edits (new worktrees, files) are what a handoff must mention. The entrypoint
-    (cli, sdk-py, …) tells an interactive session from automation."""
-    notes, work, entrypoint = {}, [], None
+    """Return ({note path: last write time}, [work times], entrypoint, tool calls read) from the
+    start of `day`. Work is every tool call in the main conversation plus file edits by subagents:
+    their reads are noise, their edits (new worktrees, files) are what a handoff must mention. The
+    entrypoint (cli, sdk-py, …) tells an interactive session from automation."""
+    notes, work, entrypoint, calls = {}, [], None, 0
     for f in (transcript, *subagents):
         for ts, entry in entries(f, start_of(day), needle='"tool_use"'):
             if entry.get("type") != "assistant":
@@ -285,6 +286,7 @@ def scan(transcript, subagents, day):
             for block in (entry.get("message") or {}).get("content") or []:
                 if not isinstance(block, dict) or block.get("type") != "tool_use":
                     continue
+                calls += 1
                 i = block.get("input") or {}
                 path = str(i.get("file_path") or i.get("notebook_path") or "")
                 edit = block.get("name") in FILE_TOOLS
@@ -292,7 +294,7 @@ def scan(transcript, subagents, day):
                     notes[path] = max(ts, notes.get(path, ts))
                 if f is transcript or (edit and not path.startswith(TEMP_ROOTS)):
                     work.append(ts)
-    return notes, work, entrypoint
+    return notes, work, entrypoint, calls
 
 
 def main(argv=None):
@@ -388,7 +390,7 @@ def main(argv=None):
             raise SystemExit(
                 f"{a.digest}: nothing since {a.date} could be read from its transcript"
             )
-        notes, _, _ = scan(t, subagents(t.stem), a.date)
+        notes = scan(t, subagents(t.stem), a.date)[0]
         # its own notes, not the snapshots it wrote about other sessions
         about = {n: SNAPSHOT.search(n) for n in notes}
         written = {
@@ -408,6 +410,14 @@ def main(argv=None):
         print(log)
         return
 
+    # run from a session, its transcript holds the call running this script (from a subagent, in
+    # the subagent's): if that can't be found or read, the format changed, even when sessions
+    # started before an update still write the old one
+    if me and not next(a.claude_dir.glob(f"projects/*/{me}.jsonl"), None):
+        raise SystemExit(
+            f"this session's transcript isn't in {tilde(str(projects))}/*/: "
+            "Claude Code's transcript layout may have changed"
+        )
     found, reports, credited = {}, set(), set()
     changed = calls = 0  # transcripts written in the window, tool calls read from them
     for t in sorted(a.claude_dir.glob("projects/*/*.jsonl")):
@@ -419,19 +429,23 @@ def main(argv=None):
                 continue
         except OSError:
             continue
-        notes, work, entrypoint = scan(t, subagents(sid), a.date)
-        changed, calls = changed + 1, calls + len(work)
+        notes, work, entrypoint, read = scan(t, subagents(sid), a.date)
+        changed, calls = changed + 1, calls + read
+        if sid == me and not read:
+            raise SystemExit(
+                f"no tool call could be read from this session's transcript since {a.date}: "
+                "Claude Code's transcript format may have changed"
+            )
         if str(entrypoint).startswith("sdk") and sid not in live:
             continue  # automation (claude -p, the SDK), not someone's working session
         if opened_for_report(t):
             reports.add(sid)  # its calls ran the report: not work that needs a note
         found[sid] = (t, notes, work)
-    # counted before this session is left out: run from a session, its own call to this script is
-    # in the window, so a format this script can read always has one
+    # from a terminal there is no call of our own to look for, so a day without tools looks the same
     if changed and not calls:
         raise SystemExit(
             f"no tool call could be read from the transcripts changed since {a.date}: "
-            "Claude Code's transcript format may have changed"
+            "Claude Code's transcript format may have changed, or no session used a tool"
         )
     # a snapshot counts for the session it describes, not for the one that wrote it (this session
     # included, which is then left out of the report)
