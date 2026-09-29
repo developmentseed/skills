@@ -22,7 +22,7 @@ Run it in a fresh session at the end of a day with several sessions, or the next
 
 ## Arguments
 
-- `--date YYYY-MM-DD`: the day to wrap up, `<date>` below. Defaults to the day it was 5 hours ago, so a run shortly after midnight still covers the evening; the next morning, pass yesterday.
+- `--date YYYY-MM-DD`: the day to wrap up. Defaults to the day it was 5 hours ago, so a run shortly after midnight still covers the evening; the next morning, pass yesterday. `<date>` below is the date on the check's first line, not today's.
 - `--dry-run`: show the report; write nothing, ask nothing.
 - `--ask NAME ...`: ask these running sessions to refresh their note (step 4).
 - `--from-transcript NAME|SID8 ...`: write a snapshot for these sessions from their transcripts (step 5).
@@ -39,7 +39,7 @@ The daily note and the notes folder come from the `session-handoffs daily note:`
 python3 "${CLAUDE_SKILL_DIR}/scripts/handoff_status.py" [--date YYYY-MM-DD]
 ```
 
-If it fails (it reads Claude Code internals, which can change), say so and stop. It leaves out this session and prints TSV with a header: one row per note worth starting from, one per session without one, and one per `replaced` snapshot.
+If it fails (it reads Claude Code internals, which can change), say so and stop. It leaves out this session. Its first line gives `<date>` and the time now, then TSV with a header: one row per note worth starting from, one per session without one, and one per `replaced` snapshot.
 
 | verdict | meaning |
 |---|---|
@@ -76,7 +76,7 @@ Show a short table: session, verdict, title, path. Unless `--dry-run`, if any se
 
 `Snapshot these N? <session>, …`
 
-The user can say yes, no, or name some; do step 5 for those. A snapshot only reads the transcript, so it wakes no one. For running sessions whose `last_active` is under an hour ago, also mention `--ask <name>` (step 4): the session writes a better note. Waking one idle longer re-reads its whole context, which costs more than a snapshot.
+The user can say yes, no, or name some; do step 5 for those. A snapshot only reads the transcript, so it wakes no one. For running sessions whose `last_active` is within an hour of the time on the check's first line, also mention `--ask <name>` (step 4): the session writes a better note. Waking one idle longer re-reads its whole context, which costs more than a snapshot.
 
 Nothing is pending after this: re-run the skill any time to pick up new notes.
 

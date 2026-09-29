@@ -117,7 +117,7 @@ class HandoffStatusTest(unittest.TestCase):
         me = os.environ.get("CLAUDE_CODE_SESSION_ID")
         if me and not any(self.dir.glob(f"projects/*/{me}.jsonl")):
             self.transcript(me, call("Bash"))
-        header, *rows = [line.split("\t") for line in self.run_cli().splitlines()]
+        _, header, *rows = [line.split("\t") for line in self.run_cli().splitlines()]
         return [dict(zip(header, r)) for r in rows]
 
     def verdicts(self):
@@ -252,6 +252,8 @@ class HandoffStatusTest(unittest.TestCase):
         self.assertEqual(
             [(r["verdict"], r["calls_after"]) for r in self.report()], [("stale", "31")]
         )
+        # the day covered, for the daily note and --digest: after midnight, not today
+        self.assertTrue(self.run_cli().startswith(f"date: {DAY}, now: "))
 
     def test_default_day_is_five_hours_ago(self):
         self.assertEqual(

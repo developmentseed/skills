@@ -26,8 +26,8 @@ A note is a .md file whose name contains "handoff", or a dated one in a handoff(
   its newest) covers it: written after it, or at most 5 calls before it (replaced). Only a
   snapshot a run of the report wrote last, or one marked SUPERSEDED, is replaced.
 
-Prints TSV after a header: one row per listed note, one per session without one, and one per
-replaced snapshot:
+Prints the day covered and the time now, then TSV after a header: one row per listed note, one
+per session without one, and one per replaced snapshot:
   verdict  session  written  calls_after  last_active  project  path  title
 verdict: fresh | stale | none                (running sessions)
          closed | closed-stale | closed-none (sessions no longer running)
@@ -554,6 +554,8 @@ def main(argv=None):
                 )
             )
 
+    # the run has the date but not the clock: after midnight, "today" is the wrong day
+    print(f"date: {a.date}, now: {datetime.now():%Y-%m-%d %H:%M}")
     print("\n".join("\t".join(r) for r in rows))
 
 
