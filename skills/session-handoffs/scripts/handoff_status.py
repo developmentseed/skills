@@ -3,11 +3,12 @@
 
 Read-only and safe to re-run. Running sessions come from the registry (<config>/sessions/*.json);
 each session's transcript (<config>/projects/*/<sessionId>.jsonl, plus its subagents' under
-projects/*/<sessionId>/subagents/) records every Write and Edit with its file path and time.
-Neither is a documented interface: if they can't be read, it exits with an error rather than print
-an empty report. <config> is $CLAUDE_CONFIG_DIR, else ~/.claude. The session running this
-($CLAUDE_CODE_SESSION_ID) is left out. A session opened to run this report (its first tool call
-runs this script or loads the skill) is never reported as lacking a note.
+projects/*/<sessionId>/subagents/) records every Write, Edit and NotebookEdit with its file path
+and time. Neither is a documented interface: if they can't be read, it exits with an error rather
+than print an empty report. <config> is $CLAUDE_CONFIG_DIR, else ~/.claude. The session running
+this ($CLAUDE_CODE_SESSION_ID) is left out, and so is automation (claude -p, the SDK) that is no
+longer running. A session opened to run this report (its first tool call runs this script or
+loads the skill) is never reported as lacking a note.
 
 The window runs from the start of --date to now. --date defaults to 5 hours ago, so a run
 shortly after midnight still covers the evening.
@@ -20,9 +21,11 @@ A note is a .md file whose name contains "handoff", or a dated one in a handoff(
 - Listed: its notes that still exist, don't open with a SUPERSEDED banner or a COMPANION line,
   and have any date in their name between --date and 3 days after it. If none qualify, its
   latest usable note. A snapshot named ..._snapshot-<sid8>.md counts for the session it
-  describes, not its writer, until that session's own note covers it (replaced).
+  describes, not its writer, until that session's own note covers it: written after it, or at
+  most 5 calls before it (replaced).
 
-Prints TSV, one row per listed note (one row per session without one):
+Prints TSV after a header: one row per listed note, one per session without one, and one per
+replaced snapshot:
   verdict  session  written  calls_after  last_active  project  path  title
 verdict: fresh | stale | none                (running sessions)
          closed | closed-stale | closed-none (sessions no longer running)
@@ -31,8 +34,12 @@ Sessions without a note that made fewer than 30 calls (a quick question) are lef
 
 --digest NAME|SID8 instead prints that session's latest note, the path for its snapshot (in
 --notes-dir if given, else the project dir of the session running this), and a compact log of its
-window: prompts, Claude's messages, one line per tool call, no tool output, common secret shapes
-and IPv4 addresses masked (best effort: a password written in prose gets through).
+window: prompts, Claude's messages, messages from other sessions, one line per tool call, no tool
+output, common secret shapes and IPv4 addresses masked (best effort: a password written in prose
+gets through). NAME is a running session's name; SID8 is the first 8+ characters of any session's
+id. It exits with an error instead of printing a path or log a snapshot can't use: a NAME or SID8
+that matches no session or several, a --notes-dir that is missing or where notes aren't found, or
+an empty log.
 """
 
 import argparse
