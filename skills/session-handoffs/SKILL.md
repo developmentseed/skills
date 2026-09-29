@@ -63,7 +63,7 @@ Only this session writes the daily note. With `--dry-run`, skip this step.
   - `` - [ ] **<title>** `<path>` ``, with ` (out of date)` after the title for `stale` and `closed-stale` rows and ` (snapshot)` for snapshots.
 - After the last item, write the record, replacing any older one: `` <!-- session-handoffs listed: `<path>` `<path>` --> ``, naming every path the older one named and every path in the report, so a line the user deleted or reworded doesn't come back. Change nothing else in the note.
 - Keep titles to a few words: take the `title` column (the note's `#` heading, else its file name) and drop a leading "Handoff"/"Handoff —"/"Handoff:" label, dates, and "(written …)" or "START HERE" parts: "Handoff — S2 drain + storage budget, Monday 28 Sep (written Fri 25 Sep ~10:30Z)" becomes "S2 drain + storage budget".
-- For each `replaced` row, even without a daily note: unless the snapshot opens with a SUPERSEDED line, make its first line `> SUPERSEDED by <the note's path> (<YYYY-MM-DD>)`, and remove the memory line step 5 wrote for it. A run of this skill wrote both; never edit the session's own note.
+- For each `replaced` row, even without a daily note: unless the snapshot opens with a SUPERSEDED line, make its first line `> SUPERSEDED by <the note's path> (<YYYY-MM-DD>)`, and drop it from the day's memory line (step 5). A run of this skill wrote both; never edit the session's own note.
 
 ### 3. Report and one question
 
@@ -116,7 +116,7 @@ In each subagent:
 Then, once every subagent has replied, this session alone writes the list and memory:
 
 4. Re-run step 1: a snapshot counts for the session it describes. Add the new ones to the list (step 2), even if the record names them.
-5. Keep one line for the day in this session's project memory, so a future session finds the snapshots: `Unreviewed /session-handoffs snapshots for <date>: <path> (<session>), …`, naming every snapshot in the report. Replace it on each run; remove it when none are left. Paths and names only: memory loads in every session, and nobody has reviewed a snapshot.
+5. Keep one line for the day in this session's project memory, so a future session finds the snapshots: `Unreviewed /session-handoffs snapshots for <date>: <path> (<session>), …`, naming every snapshot in the report that isn't `replaced`. Replace it on each run; remove it when none are left. Paths and names only: memory loads in every session, and nobody has reviewed a snapshot.
 
 ## Limits
 
