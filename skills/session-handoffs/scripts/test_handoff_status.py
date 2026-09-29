@@ -220,6 +220,8 @@ class HandoffStatusTest(unittest.TestCase):
             self.note("handoff_status.py"),  # not a note
             self.note("session-handoffs/SKILL.md"),  # a directory named for handoffs
             self.note("handoffs/run.py"),  # not a note
+            self.note("handoffs/README.md"),  # the folder's index, not a note
+            self.note("handoff_202609201030.md"),  # older, with a time
             str(self.dir / f"handoff_{DAY}_denied.md"),  # write never landed
             self.note(f"wt/handoff_{DAY}.md"),  # deleted with the worktree
         ]
@@ -303,12 +305,12 @@ class HandoffStatusTest(unittest.TestCase):
         rows = [(r["session"], r["verdict"], r["path"]) for r in self.report()]
         self.assertEqual(rows, [("bbbbbbbb", "closed", snapshot)])
 
-    def test_earlier_runs_of_the_report_are_left_out_and_their_snapshots_count(self):
+    def test_a_run_of_the_report_is_never_listed_as_lacking_a_note(self):
+        run = 'python3 "/x/scripts/handoff_status.py"'
         snapshot = self.note(f"handoff_{DAY}_snapshot-bbbbbbbb.md", "# Snapshot")
-        self.session(1, "slash-run", sid("c"))  # opened with /session-handoffs
-        self.transcript(
+        self.transcript(  # opened with /session-handoffs, snapshotted b
             sid("c"),
-            call("Bash", hour=9, command='python3 "/x/scripts/handoff_status.py"'),
+            call("Bash", hour=9, command=run),
             *work(40, 9),
             call("Write", snapshot, 10),
         )
@@ -316,30 +318,67 @@ class HandoffStatusTest(unittest.TestCase):
             sid("e"), call("Skill", hour=9, skill="session-handoffs"), *work(40, 9)
         )
         self.transcript(sid("b"), *work(40, 9))  # closed, described by the snapshot
+        self.transcript(  # opened for the report, then put to work and snapshotted
+            sid("f"), call("Skill", hour=9, skill="session-handoffs"), *work(60, 10)
+        )
+        self.transcript(
+            sid("d"),  # "me"
+            call("Write", self.note(f"handoff_{DAY}_snapshot-ffffffff.md"), 12),
+        )
         self.transcript(  # a working session that ran the report late in the day
             sid("a"),
             call("Bash", hour=9, command="python3 scripts/test_handoff_status.py"),
             *work(40, 9),
-            call("Bash", hour=18, command='python3 "/x/scripts/handoff_status.py"'),
+            call("Bash", hour=18, command=run),
+        )
+        self.transcript(  # its first call only names the script
+            sid("1"),
+            call("Bash", hour=9, command="git diff -- scripts/handoff_status.py"),
+            *work(40, 9),
+        )
+        self.transcript(  # worked the day before; its first call today ran the report
+            sid("2"),
+            *work(3, 9, day="2026-09-27"),
+            call("Bash", hour=8, command=run),
+            *work(40, 9),
         )
         self.assertEqual(
-            self.verdicts(), [("aaaaaaaa", "closed-none"), ("bbbbbbbb", "closed")]
+            self.verdicts(),
+            [
+                ("11111111", "closed-none"),
+                ("22222222", "closed-none"),
+                ("aaaaaaaa", "closed-none"),
+                ("bbbbbbbb", "closed"),
+                ("ffffffff", "closed"),
+            ],
         )
 
     def test_a_snapshot_goes_out_of_date_sooner_than_a_note(self):
-        snapshots = [self.note(f"handoff_{DAY}_snapshot-{c * 8}.md") for c in "ab"]
+        snapshots = [self.note(f"handoff_{DAY}_snapshot-{c * 8}.md") for c in "abc"]
         self.transcript(sid("d"), *[call("Write", s, 10) for s in snapshots])  # by "me"
         for pid, c, calls in ((1, "a", 5), (2, "b", 6)):
             self.session(pid, f"src-{c}", sid(c))
             self.transcript(sid(c), *work(40, 9), *work(calls, 11))
-        self.assertEqual(self.verdicts(), [("src-a", "fresh"), ("src-b", "stale")])
+        # a session that then edited the snapshot of itself is judged as by its own note
+        self.session(3, "src-c", sid("c"))
+        self.transcript(
+            sid("c"), *work(40, 9), call("Edit", snapshots[2], 11), *work(6, 12)
+        )
+        self.assertEqual(
+            self.verdicts(),
+            [("src-a", "fresh"), ("src-b", "stale"), ("src-c", "fresh")],
+        )
 
     def test_two_running_sessions_with_the_same_name(self):
         self.session(1, "s", sid("a"))
         self.session(2, "s", sid("b"))
         self.transcript(sid("a"), call("Write", self.note(f"handoff_{DAY}_a.md")))
         self.transcript(sid("b"), call("Write", self.note(f"handoff_{DAY}_b.md")))
-        self.assertEqual(self.verdicts(), [("s", "fresh"), ("s", "fresh")])
+        self.assertEqual(
+            self.verdicts(), [("s (aaaaaaaa)", "fresh"), ("s (bbbbbbbb)", "fresh")]
+        )
+        with self.assertRaisesRegex(SystemExit, "2 running sessions have this name"):
+            self.run_cli("--digest", "s")
 
     def test_marking_an_old_note_superseded_does_not_refresh_a_session(self):
         today = self.note(f"handoff_{DAY}_x.md", "# Today")
@@ -363,6 +402,9 @@ class HandoffStatusTest(unittest.TestCase):
         self.transcript(
             sid("b"), *[dict(c, entrypoint="sdk-py") for c in work(40)]
         )  # automation
+        self.transcript(  # automation whose first entry doesn't say so
+            sid("c"), call("Bash"), *[dict(c, entrypoint="sdk-py") for c in work(40)]
+        )
         rows = [(r["session"], r["path"]) for r in self.report()]
         self.assertEqual(rows, [("aaaaaaaa", kept)])
 
@@ -413,6 +455,15 @@ class HandoffStatusTest(unittest.TestCase):
                     "export S3_KEY=s3secretvalue",
                     'curl "https://a.blob.core.windows.net/c?sv=2020&sig=sasSIGvalue"',
                     "ssh 203.0.113.7 uptime",
+                    """echo '{"private_key": "-----BEGIN PRIVATE KEY----- MIIEvQIBADAN"}'""",
+                    "cat -----BEGIN RSA PRIVATE KEY----- Proc-Type: 4,ENCRYPTED MIIEpAkey",
+                    "gpg --import -----BEGIN PGP PRIVATE KEY BLOCK----- lQOYBFkey",
+                    "mysql --password 'hunter5'",
+                    'vault login --token "s.abcdefghijkl"',
+                    'export DB_PASSWORD="correct horse battery"',
+                    'curl -H "Authorization: rawtoken123" https://x',
+                    "export GL=glpat-abcdefghij1234 HF=hf_abcdefghijklmn",
+                    "export STRIPE=sk_live_abcdefghij12",
                 )
             ],
             tool_output("SECRET_TOKEN=abc123", 11),
@@ -456,8 +507,24 @@ class HandoffStatusTest(unittest.TestCase):
             "s3secretvalue",
             "sasSIGvalue",
             "203.0.113.7",
+            "MIIEvQ",
+            "ENCRYPTED",
+            "MIIEpA",
+            "lQOYBF",
+            "hunter5",
+            "s.abcdefghijkl",
+            "horse",
+            "rawtoken123",
+            "glpat-abc",
+            "hf_abc",
+            "sk_live",
         ):
             self.assertNotIn(text, out)
+
+    def test_masking_a_long_unbroken_blob_is_fast(self):
+        start = time.monotonic()
+        handoff_status.short("a" * 30_000, 100)
+        self.assertLess(time.monotonic() - start, 2)
 
     def test_digest_refuses_an_id_prefix_shared_by_two_sessions(self):
         self.transcript(sid("a"), *work(3))
