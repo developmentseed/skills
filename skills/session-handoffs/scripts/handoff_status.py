@@ -317,7 +317,9 @@ def main(argv=None):
         # a running session by name, or any session by the first 8+ characters of its id
         named = [s for s, n in live.items() if n == a.digest]
         if len(named) > 1:
-            raise SystemExit(f"{a.digest}: {len(named)} running sessions have this name, give the sid8")
+            raise SystemExit(
+                f"{a.digest}: {len(named)} running sessions have this name, give the sid8"
+            )
         sid = named[0] if named else None
         if sid is None and re.fullmatch(r"[0-9a-f-]{8,36}", a.digest):
             sid = a.digest + "*"
@@ -327,7 +329,9 @@ def main(argv=None):
             if SESSION_ID.fullmatch(t.stem)
         }
         if len(matches) > 1:
-            raise SystemExit(f"{a.digest}: matches {len(matches)} sessions, give more of the id")
+            raise SystemExit(
+                f"{a.digest}: matches {len(matches)} sessions, give more of the id"
+            )
         if not matches:
             raise SystemExit(f"{a.digest}: no transcript found")
         (t,) = matches.values()
@@ -400,7 +404,9 @@ def main(argv=None):
             newest = max(usable, key=usable.get)
             latest = usable[newest]
             after = sum(w > latest for w in work)
-            stale = after > (SNAPSHOT_STALE_AFTER if newest in credited else STALE_AFTER)
+            stale = after > (
+                SNAPSHOT_STALE_AFTER if newest in credited else STALE_AFTER
+            )
             verdict = (
                 ("stale" if stale else "fresh")
                 if name
