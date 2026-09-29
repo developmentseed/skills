@@ -278,6 +278,10 @@ class HandoffStatusTest(unittest.TestCase):
             "companion": "> COMPANION of `handoff_new.md`\n\n# Kept beside it\n",
             "companions": "# Live\n\n**Companion notes:** `a.md`, `b.md`\n",
             "companion_to": "Companion to `a.md` (same directory)\n\n# Beside\n",
+            # only a quoted line that opens with "companion of" is a banner
+            "quoted_list": "> **Companion notes:** `a.md`, `b.md`\n\n# Quoted list\n",
+            "unquoted_of": "Companion of `a.md`: the budget half\n\n# Unquoted\n",
+            "mid_line": "> See the companion of `a.md` for costs\n\n# Mid-line\n",
             "no_h1": "## Status check\n\nbody",
         }
         paths = {
@@ -297,6 +301,9 @@ class HandoffStatusTest(unittest.TestCase):
                     (paths["section"], "Section"),
                     (paths["companions"], "Live"),
                     (paths["companion_to"], "Beside"),
+                    (paths["quoted_list"], "Quoted list"),
+                    (paths["unquoted_of"], "Unquoted"),
+                    (paths["mid_line"], "Mid-line"),
                     (paths["no_h1"], f"handoff_{DAY}_no_h1"),
                 ]
             ),
@@ -387,7 +394,7 @@ class HandoffStatusTest(unittest.TestCase):
     def test_an_own_note_replaces_the_snapshot_it_covers(self):
         snap = {
             c: self.note(f"handoff_{DAY}_snapshot-{c * 8}.md", "# Snap")
-            for c in "abcef"
+            for c in "abcef123"
         }
         # written by "me", the session running the report
         self.transcript(sid("d"), *[call("Write", s, 10) for s in snap.values()])
@@ -409,6 +416,25 @@ class HandoffStatusTest(unittest.TestCase):
         self.session(5, "deleted", sid("f"))  # its snapshot is gone: nothing to replace
         os.remove(snap["f"])
         self.transcript(sid("f"), *work(40, 8), call("Write", own["f"], 11))
+        self.session(6, "two", sid("1"))  # the newer of its own notes replaces it
+        old, new = (
+            self.note(f"handoffs/{DAY}-two-{x}.md", "# Own") for x in ("a", "b")
+        )
+        self.transcript(
+            sid("1"), call("Write", old, 7), *work(40, 8), call("Write", new, 11)
+        )
+        self.session(7, "denied", sid("2"))  # its own note never landed
+        self.transcript(
+            sid("2"),
+            *work(40, 8),
+            call("Write", str(self.dir / f"handoff_{DAY}_x.md"), 11),
+        )
+        self.session(8, "older", sid("3"))  # then edited a note named for another day
+        topic = self.note(f"handoff_{DAY}_topic.md", "# Own")
+        other = self.note("handoff_2026-09-20_other.md", "# Other")
+        self.transcript(
+            sid("3"), call("Write", topic, 9), *work(20, 10), call("Edit", other, 13)
+        )
         report = self.report()
         # a snapshot's row comes first, so its line is swapped before the own note is added
         self.assertEqual(
@@ -428,8 +454,40 @@ class HandoffStatusTest(unittest.TestCase):
                     ("marked", "fresh", own["e"], "Own"),
                     ("marked", "replaced", snap["e"], own["e"]),
                     ("deleted", "fresh", own["f"], "Own"),
+                    ("two", "fresh", old, "Own"),
+                    ("two", "fresh", new, "Own"),
+                    ("two", "replaced", snap["1"], new),
+                    ("denied", "fresh", snap["2"], "Snap"),
+                    ("older", "fresh", topic, "Own"),
+                    ("older", "fresh", snap["3"], "Snap"),
                 ]
             ),
+        )
+
+    def test_a_snapshot_someone_works_from_is_not_replaced(self):
+        snap = {c: self.note(f"handoff_{DAY}_snapshot-{c * 8}.md") for c in "ab"}
+        self.transcript(sid("d"), *[call("Write", s, 10) for s in snap.values()])
+        other = {c: self.note(f"handoff_{DAY}_other-{c}.md") for c in "ab"}
+        # continued from its snapshot, then did other work
+        self.session(1, "resumed", sid("a"))
+        self.transcript(
+            sid("a"),
+            *work(40, 8),
+            call("Edit", snap["a"], 11),
+            *work(20, 12),
+            call("Write", other["a"], 13),
+        )
+        self.session(2, "shared", sid("b"))  # another session resumed from its snapshot
+        self.transcript(sid("b"), *work(40, 8), call("Write", other["b"], 13))
+        self.transcript(sid("c"), call("Edit", snap["b"], 12))
+        self.assertEqual(
+            sorted((r["session"], r["verdict"], r["path"]) for r in self.report()),
+            [
+                ("resumed", "fresh", other["a"]),
+                ("resumed", "fresh", snap["a"]),
+                ("shared", "fresh", other["b"]),
+                ("shared", "fresh", snap["b"]),
+            ],
         )
 
     def test_two_running_sessions_with_the_same_name(self):

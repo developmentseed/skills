@@ -22,8 +22,9 @@ A note is a .md file whose name contains "handoff", or a dated one in a handoff(
 - Listed: its notes that still exist, don't open with a SUPERSEDED banner or a COMPANION line,
   and have any date in their name between --date and 3 days after it. If none qualify, its
   latest usable note. A snapshot named ..._snapshot-<sid8>.md counts for the session it
-  describes, not its writer, until that session's own note covers it: written after it, or at
-  most 5 calls before it (replaced).
+  describes, not its writer, until that session's own note (its newest named for --date, else
+  its newest) covers it: written after it, or at most 5 calls before it (replaced). Only a
+  snapshot a run of the report wrote last, or one marked SUPERSEDED, is replaced.
 
 Prints TSV after a header: one row per listed note, one per session without one, and one per
 replaced snapshot:
@@ -155,6 +156,7 @@ def is_note(path):
         (
             "handoff" in p.name
             # a dated note, not the folder's README or template, nor a PR or issue body kept there
+            # ("body" anywhere in the name, "antibody" too; other drafts kept there still count)
             or (
                 p.parent.name in ("handoff", "handoffs")
                 and NAME_DATE.search(p.name)
@@ -418,7 +420,7 @@ def main(argv=None):
             f"this session's transcript isn't in {tilde(str(projects))}/*/: "
             "Claude Code's transcript layout may have changed"
         )
-    found, reports, credited = {}, set(), set()
+    found, reports, credited, ours = {}, set(), set(), set()
     changed = calls = 0  # transcripts written in the window, tool calls read from them
     for t in sorted(a.claude_dir.glob("projects/*/*.jsonl")):
         sid = t.stem
@@ -460,6 +462,8 @@ def main(argv=None):
                 if own is None or ts > own:  # unless the session edited it later itself
                     found[source][1][path] = ts
                     credited.add(path)
+                    # written last by a run of this report, not by a session working from it
+                    (ours.add if sid in reports or sid == me else ours.discard)(path)
     found.pop(me, None)
     names = Counter(live.values())
 
@@ -476,15 +480,19 @@ def main(argv=None):
         usable = {n: ts for n, ts in notes.items() if titles[n] is not None}
         # a snapshot fills a gap: once the session's own note covers it (written after it, or at
         # most SNAPSHOT_STALE_AFTER calls before it), that note replaces it. Found by name and on
-        # disk, so one the session marked superseded itself is still reported as replaced
+        # disk, so one the session marked superseded itself is still reported as replaced; one a
+        # session edited without marking it is a note someone works from, and stays
         snaps = [n for n in notes if sid[:8] in SNAPSHOT.findall(n)]
         own = {n: ts for n, ts in usable.items() if n not in snaps}
+        # one named for another day is likely about other work: only if there is no other
+        own = {n: ts for n, ts in own.items() if dated_for(n, a.date)} or own
         mine = max(own, key=own.get, default=None)
         replaced = [
             n
             for n in snaps
             if mine
             and os.path.exists(n)
+            and (n in ours or titles[n] is None)
             and sum(own[mine] < w <= notes[n] for w in work) <= SNAPSHOT_STALE_AFTER
         ]
         usable = {n: ts for n, ts in usable.items() if n not in replaced}
