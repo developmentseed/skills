@@ -307,13 +307,14 @@ class HandoffStatusTest(unittest.TestCase):
         self.assertEqual(rows, [("bbbbbbbb", "closed", snapshot)])
 
     def test_a_snapshot_written_by_this_session_counts_for_its_source(self):
-        snapshot = self.note(f"handoff_{DAY}_snapshot-bbbbbbbb.md", "# Snapshot")
-        self.transcript(
-            sid("d"), call("Write", snapshot, 10)
-        )  # "me", running the report
+        b, c = (self.note(f"handoff_{DAY}_snapshot-{x * 8}.md") for x in "bc")
+        # "me", running the report, wrote one; its subagent wrote the other (step 5)
+        self.transcript(sid("d"), call("Write", b, 10))
+        self.transcript(sid("d"), call("Write", c, 10), sub="agent-1")
         self.transcript(sid("b"), *work(40, 9))
+        self.transcript(sid("c"), *work(40, 9))
         rows = [(r["session"], r["verdict"], r["path"]) for r in self.report()]
-        self.assertEqual(rows, [("bbbbbbbb", "closed", snapshot)])
+        self.assertEqual(rows, [("bbbbbbbb", "closed", b), ("cccccccc", "closed", c)])
 
     def test_a_run_of_the_report_is_never_listed_as_lacking_a_note(self):
         run = 'python3 "/x/scripts/handoff_status.py"'
