@@ -209,6 +209,8 @@ class HandoffStatusTest(unittest.TestCase):
             self.note(f"handoffs/{DAY}-actions.md"),  # in a handoffs/ directory
             self.note("handoff_job-120260925.md"),  # build numbers, not dates
             self.note("handoff_202609251.md"),
+            # "body" rules out a file in handoffs/ only
+            self.note(f"handoff_{DAY}_body_parser.md"),
         ]
         not_listed = [
             self.note("memory/project-handoff.md"),  # memory pointer
@@ -221,6 +223,7 @@ class HandoffStatusTest(unittest.TestCase):
             self.note("session-handoffs/SKILL.md"),  # a directory named for handoffs
             self.note("handoffs/run.py"),  # not a note
             self.note("handoffs/README.md"),  # the folder's index, not a note
+            self.note(f"handoffs/{DAY}-pr-12-body.md"),  # a PR body, not a note
             self.note("handoff_202609201030.md"),  # older, with a time
             str(self.dir / f"handoff_{DAY}_denied.md"),  # write never landed
             self.note(f"wt/handoff_{DAY}.md"),  # deleted with the worktree
@@ -268,6 +271,10 @@ class HandoffStatusTest(unittest.TestCase):
             "arrow": "# Arrow\n\n> **SUPERSEDED 2026-09-24 → `x.md`.**\n",
             "quoted_prose": "# Plan\n\n> Note: approach A was superseded by B last week.\n",
             "section": "# Section\n\n## Superseded options\n",
+            "companion": "> COMPANION of `handoff_new.md`\n\n# Kept beside it\n",
+            "companions": "# Live\n\n**Companion notes:** `a.md`, `b.md`\n",
+            "companion_to": "Companion to `a.md` (same directory)\n\n# Beside\n",
+            "no_h1": "## Status check\n\nbody",
         }
         paths = {
             k: self.note(f"handoff_{DAY}_{k}.md", body) for k, body in bodies.items()
@@ -284,6 +291,9 @@ class HandoffStatusTest(unittest.TestCase):
                     (paths["inpart"], "Kept"),
                     (paths["quoted_prose"], "Plan"),
                     (paths["section"], "Section"),
+                    (paths["companions"], "Live"),
+                    (paths["companion_to"], "Beside"),
+                    (paths["no_h1"], f"handoff_{DAY}_no_h1"),
                 ]
             ),
         )
@@ -367,6 +377,54 @@ class HandoffStatusTest(unittest.TestCase):
         self.assertEqual(
             self.verdicts(),
             [("src-a", "fresh"), ("src-b", "stale"), ("src-c", "fresh")],
+        )
+
+    def test_an_own_note_replaces_the_snapshot_it_covers(self):
+        snap = {
+            c: self.note(f"handoff_{DAY}_snapshot-{c * 8}.md", "# Snap")
+            for c in "abcef"
+        }
+        # written by "me", the session running the report
+        self.transcript(sid("d"), *[call("Write", s, 10) for s in snap.values()])
+        own = {c: self.note(f"handoffs/{DAY}-{c}.md", "# Own") for c in "abcef"}
+        self.session(1, "after", sid("a"))  # wrote its own note after the snapshot
+        self.transcript(sid("a"), *work(40, 8), call("Write", own["a"], 11))
+        self.session(2, "before", sid("b"))  # its own note, 5 calls, then the snapshot
+        self.transcript(sid("b"), *work(40, 7), call("Write", own["b"], 8), *work(5, 9))
+        self.session(3, "busy", sid("c"))  # 6 calls: the snapshot holds news
+        self.transcript(sid("c"), *work(40, 7), call("Write", own["c"], 8), *work(6, 9))
+        self.session(4, "marked", sid("e"))  # then marked the snapshot superseded
+        self.note(f"handoff_{DAY}_snapshot-{'e' * 8}.md", "> SUPERSEDED by own\n# Snap")
+        self.transcript(
+            sid("e"),
+            *work(40, 8),
+            call("Write", own["e"], 11),
+            call("Edit", snap["e"], 11),
+        )
+        self.session(5, "deleted", sid("f"))  # its snapshot is gone: nothing to replace
+        os.remove(snap["f"])
+        self.transcript(sid("f"), *work(40, 8), call("Write", own["f"], 11))
+        report = self.report()
+        # a snapshot's row comes first, so its line is swapped before the own note is added
+        self.assertEqual(
+            [r["verdict"] for r in report if r["session"] == "after"],
+            ["replaced", "fresh"],
+        )
+        self.assertEqual(
+            sorted((r["session"], r["verdict"], r["path"], r["title"]) for r in report),
+            sorted(
+                [
+                    ("after", "fresh", own["a"], "Own"),
+                    ("after", "replaced", snap["a"], own["a"]),
+                    ("before", "fresh", own["b"], "Own"),
+                    ("before", "replaced", snap["b"], own["b"]),
+                    ("busy", "fresh", own["c"], "Own"),
+                    ("busy", "fresh", snap["c"], "Snap"),
+                    ("marked", "fresh", own["e"], "Own"),
+                    ("marked", "replaced", snap["e"], own["e"]),
+                    ("deleted", "fresh", own["f"], "Own"),
+                ]
+            ),
         )
 
     def test_two_running_sessions_with_the_same_name(self):

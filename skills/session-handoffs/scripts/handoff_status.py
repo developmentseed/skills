@@ -11,19 +11,21 @@ first tool call runs this script or loads the skill) is never reported as lackin
 The window runs from the start of --date to now. --date defaults to 5 hours ago, so a run
 shortly after midnight still covers the evening.
 
-A note is a .md file whose name contains "handoff", or a dated one in a handoff(s)/ directory,
-outside memory/, temp dirs and git worktrees.
+A note is a .md file whose name contains "handoff", or a dated one in a handoff(s)/ directory
+(not a PR or issue body), outside memory/, temp dirs and git worktrees.
 - Out of date: a session is stale when, after its latest write to a note, it made more than 30
   tool calls in its main conversation or file edits through its subagents. More than 5 when that
   write is another session's snapshot of it, which can't know what came after it.
-- Listed: its notes that still exist, don't open with a SUPERSEDED banner, and have any date in
-  their name between --date and 3 days after it. If none qualify, its latest usable note. A
-  snapshot named ..._snapshot-<sid8>.md counts for the session it describes, not its writer.
+- Listed: its notes that still exist, don't open with a SUPERSEDED banner or a COMPANION line,
+  and have any date in their name between --date and 3 days after it. If none qualify, its
+  latest usable note. A snapshot named ..._snapshot-<sid8>.md counts for the session it
+  describes, not its writer, until that session's own note covers it (replaced).
 
 Prints TSV, one row per listed note (one row per session without one):
   verdict  session  written  calls_after  last_active  project  path  title
 verdict: fresh | stale | none                (running sessions)
          closed | closed-stale | closed-none (sessions no longer running)
+         replaced: a snapshot its session's own note covers; title is that note's path
 Sessions without a note that made fewer than 30 calls (a quick question) are left out.
 
 --digest NAME|SID8 instead prints that session's latest note, the path for its snapshot (in the
@@ -56,9 +58,12 @@ SNAPSHOT = re.compile(r"snapshot-([0-9a-f]{8})\.md$")
 REPORT_RUN = re.compile(r"python3?\s+\S*/handoff_status\.py")
 # a line that opens with the word, maybe after a date, and says what replaced it:
 # "> ⏭️ **SUPERSEDED by x.md**", "> **2026-09-28: superseded. START AT …**", "SUPERSEDED 2026-09-24 → x".
-# Not "## Superseded options", "superseded in part", or the word in the middle of prose.
+# Not "## Superseded options", "superseded in part", or the word in the middle of prose. Also
+# "> COMPANION of <path>": a note kept on purpose beside the current one, which links it. Only
+# that quoted form: many notes open with "Companion notes: …" naming live companions.
 BANNER = re.compile(
-    r"\W*(?:\d{4}-\d{2}-\d{2}[^:\n]{0,20}:\s*\W*)?superseded\b(?=\s*(?:by\b|as\b|for\b|[.:;,→—–*-]|\d|$))",
+    r">\W*companion of\b"
+    r"|\W*(?:\d{4}-\d{2}-\d{2}[^:\n]{0,20}:\s*\W*)?superseded\b(?=\s*(?:by\b|as\b|for\b|[.:;,→—–*-]|\d|$))",
     re.I,
 )
 # a private key block, up to its END line (or the end of the text when it has none); masked
@@ -140,8 +145,12 @@ def is_note(path):
     return (
         (
             "handoff" in p.name
-            # a dated note, not the folder's README or template
-            or (p.parent.name in ("handoff", "handoffs") and NAME_DATE.search(p.name))
+            # a dated note, not the folder's README or template, nor a PR or issue body kept there
+            or (
+                p.parent.name in ("handoff", "handoffs")
+                and NAME_DATE.search(p.name)
+                and "body" not in p.name
+            )
         )
         and p.name.endswith(".md")
         and "/memory/" not in path
@@ -159,8 +168,8 @@ def dated_for(path, day):
 
 
 def note_title(path):
-    """Return the note's title (first heading, else its file name), or None if it's gone (a denied
-    Write leaves no file) or opens with a SUPERSEDED banner (it points to another note)."""
+    """Return the note's title (its `#` heading, else its file name), or None if it's gone (a denied
+    Write leaves no file) or opens with a SUPERSEDED or COMPANION line (it points to another note)."""
     try:
         with open(path, encoding="utf-8-sig", errors="replace") as fh:
             lines = [line.strip() for line, _ in zip(fh, range(200))]
@@ -175,7 +184,8 @@ def note_title(path):
     head = [line for line in lines if line][:6]
     if any(BANNER.match(line) for line in head):
         return None
-    heading = next((h.lstrip("#").strip() for h in head if h.startswith("#")), "")
+    # a level-2 heading is a section ("## Status"), not the note's title
+    heading = next((h[2:].strip() for h in head if h.startswith("# ")), "")
     return heading or Path(path).stem
 
 
@@ -400,6 +410,20 @@ def main(argv=None):
         # notes that still exist and don't point elsewhere; only these count, so marking an old
         # note superseded doesn't make the session look up to date
         usable = {n: ts for n, ts in notes.items() if titles[n] is not None}
+        # a snapshot fills a gap: once the session's own note covers it (written after it, or at
+        # most SNAPSHOT_STALE_AFTER calls before it), that note replaces it. Found by name and on
+        # disk, so one the session marked superseded itself is still reported as replaced
+        snaps = [n for n in notes if sid[:8] in SNAPSHOT.findall(n)]
+        own = {n: ts for n, ts in usable.items() if n not in snaps}
+        mine = max(own, key=own.get, default=None)
+        replaced = [
+            n
+            for n in snaps
+            if mine
+            and os.path.exists(n)
+            and sum(own[mine] < w <= notes[n] for w in work) <= SNAPSHOT_STALE_AFTER
+        ]
+        usable = {n: ts for n, ts in usable.items() if n not in replaced}
         if usable:
             newest = max(usable, key=usable.get)
             latest = usable[newest]
@@ -415,6 +439,20 @@ def main(argv=None):
             listed = {n: ts for n, ts in usable.items() if dated_for(n, a.date)}
             if not listed:
                 listed = {newest: latest}
+            # before the session's notes, so a line for the snapshot is swapped, not doubled
+            rows += [
+                (
+                    "replaced",
+                    label,
+                    hhmm(notes[n]),
+                    "-",
+                    hhmm(last),
+                    t.parent.name,
+                    tilde(n),
+                    tilde(mine),
+                )
+                for n in replaced
+            ]
             for n, ts in sorted(listed.items(), key=lambda kv: kv[1]):
                 title = titles[n].replace("\t", " ")
                 after_n = str(sum(w > ts for w in work))
