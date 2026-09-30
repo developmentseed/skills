@@ -5,11 +5,12 @@ Read-only and safe to re-run. Running sessions come from the registry (<config>/
 each session's transcript (<config>/projects/*/<sessionId>.jsonl, plus its subagents' under
 projects/*/<sessionId>/subagents/) records every Write, Edit and NotebookEdit with its file path
 and time. Neither is a documented interface: if they can't be read, it exits with an error rather
-than print an empty report. Run from a terminal, it can't tell that from a window in which no
-session used a tool, and exits with an error for both. <config> is $CLAUDE_CONFIG_DIR, else
-~/.claude. The session running this ($CLAUDE_CODE_SESSION_ID) is left out, and so is automation
-(claude -p, the SDK) that is no longer running. A session opened to run this report (its first
-tool call runs this script or loads the skill) is never reported as lacking a note.
+than print an empty report (a registry that moved isn't noticed: every session then reads as
+closed). Run from a terminal, it can't tell that from a window in which no session used a tool,
+and exits with an error for both. <config> is $CLAUDE_CONFIG_DIR, else ~/.claude. The session
+running this ($CLAUDE_CODE_SESSION_ID) is left out, and so is automation (claude -p, the SDK) that
+is no longer running. A session opened to run this report (its first tool call runs this script
+or loads the skill) is never reported as lacking a note.
 
 The window runs from the start of --date to now. --date defaults to 5 hours ago, so a run
 shortly after midnight still covers the evening.
@@ -21,10 +22,11 @@ A note is a .md file whose name contains "handoff", or a dated one in a handoff(
   write is another session's snapshot of it, which can't know what came after it.
 - Listed: its notes that still exist, don't open with a SUPERSEDED banner or a COMPANION line,
   and have any date in their name between --date and 3 days after it. If none qualify, its
-  latest usable note. A snapshot named ..._snapshot-<sid8>.md counts for the session it
-  describes, not its writer, until that session's own note (its newest named for --date, else
+  latest usable note. A snapshot named ..._snapshot-<sid8>.md that a run of the report writes
+  counts for the session it describes, not its writer; another session's write of it is that
+  session's own note. It counts until the session's own note (its newest named for --date, else
   its newest) covers it: written after it, or at most 5 calls before it (replaced). Only a
-  snapshot a run of the report wrote last, or one marked SUPERSEDED, is replaced.
+  snapshot a run of the report wrote last is replaced; one marked SUPERSEDED always is.
 
 Prints the day covered and the time now, then TSV after a header: one row per listed note, one
 per session without one, and one per replaced snapshot:
@@ -40,8 +42,9 @@ window: prompts, Claude's messages, messages from other sessions, one line per t
 output, common secret shapes and IPv4 addresses masked (best effort: a password written in prose
 gets through). NAME is a running session's name; SID8 is the first 8+ characters of any session's
 id. It exits with an error instead of printing a path or log a snapshot can't use: a NAME or SID8
-that matches no session or several, a --notes-dir that is missing or where notes aren't found, or
-an empty log.
+that matches no session or several, a --notes-dir that isn't an absolute path to a folder where
+notes are found, a snapshot that a session other than a run of the report wrote last (it may work
+from it), or an empty log.
 """
 
 import argparse
@@ -273,6 +276,19 @@ def opened_for_report(transcript):
     return False
 
 
+def transcripts(claude_dir, day):
+    """Yield each session's transcript written to since the start of `day`."""
+    for t in sorted(claude_dir.glob("projects/*/*.jsonl")):
+        try:
+            if (
+                SESSION_ID.fullmatch(t.stem)
+                and datetime.fromtimestamp(t.stat().st_mtime).date() >= day
+            ):
+                yield t
+        except OSError:
+            continue
+
+
 def scan(transcript, subagents, day):
     """Return ({note path: last write time}, [work times], entrypoint, tool calls read) from the
     start of `day`. Work is every tool call in the main conversation plus file edits by subagents:
@@ -346,11 +362,6 @@ def main(argv=None):
         registered = registered or bool(sid)
         if sid and sid != me and s.get("kind", "interactive") == "interactive":
             live[sid] = s.get("name") or sid[:8]
-    if registry and not registered:
-        raise SystemExit(
-            f"no sessionId in {tilde(str(registry[0].parent))}/*.json: "
-            "Claude Code's session registry may have changed"
-        )
 
     def subagents(sid):
         return list(a.claude_dir.glob(f"projects/*/{sid}/subagents/**/*.jsonl"))
@@ -381,11 +392,29 @@ def main(argv=None):
         snapshot = (a.notes_dir or (own or t).parent) / (
             f"handoff_{a.date}_snapshot-{t.stem[:8]}.md"
         )
-        # the script doesn't create the folder; a snapshot the check can't find would never count
-        if a.notes_dir and not (a.notes_dir.is_dir() and is_note(str(snapshot))):
+        # the script doesn't create the folder; a snapshot the check can't find would never count,
+        # nor would a relative one, which lands wherever the subagent runs
+        if a.notes_dir and not (
+            a.notes_dir.is_absolute()
+            and a.notes_dir.is_dir()
+            and is_note(str(snapshot))
+        ):
             raise SystemExit(
-                f"--notes-dir {tilde(str(a.notes_dir))}: no such folder, or notes in it aren't found (memory/, temp dirs, git worktrees)"
+                f"--notes-dir '{tilde(str(a.notes_dir))}': not an absolute path, no such folder, or notes in it aren't found (memory/, temp dirs, git worktrees)"
             )
+        # a snapshot someone else wrote last, the session it describes included, is a note they
+        # work from: replacing it would lose their edits
+        if snapshot.exists():
+            writes = {
+                s: scan(s, subagents(s.stem), a.date)[0].get(str(snapshot))
+                for s in transcripts(a.claude_dir, a.date)
+            }
+            by = max((s for s in writes if writes[s]), key=writes.get, default=None)
+            if by and (by == t or (by.stem != me and not opened_for_report(by))):
+                raise SystemExit(
+                    f"{tilde(str(snapshot))}: session {live.get(by.stem, by.stem[:8])} wrote it last, "
+                    "not a run of /session-handoffs, and may work from it: not replacing it"
+                )
         # an empty log would make an empty snapshot: a format change, or nothing in the window
         log = digest(t, start_of(a.date))
         if not log:
@@ -412,6 +441,12 @@ def main(argv=None):
         print(log)
         return
 
+    # only the report needs the registry: --digest finds any session by its id
+    if registry and not registered:
+        raise SystemExit(
+            f"no sessionId in {tilde(str(registry[0].parent))}/*.json: "
+            "Claude Code's session registry may have changed"
+        )
     # run from a session, its transcript holds the call running this script (from a subagent, in
     # the subagent's): if that can't be found or read, the format changed, even when sessions
     # started before an update still write the old one
@@ -420,17 +455,10 @@ def main(argv=None):
             f"this session's transcript isn't in {tilde(str(projects))}/*/: "
             "Claude Code's transcript layout may have changed"
         )
-    found, reports, credited, ours = {}, set(), set(), set()
+    found, reports, credited, last = {}, set(), set(), {}
     changed = calls = 0  # transcripts written in the window, tool calls read from them
-    for t in sorted(a.claude_dir.glob("projects/*/*.jsonl")):
+    for t in transcripts(a.claude_dir, a.date):
         sid = t.stem
-        if not SESSION_ID.fullmatch(sid):
-            continue
-        try:
-            if datetime.fromtimestamp(t.stat().st_mtime).date() < a.date:
-                continue
-        except OSError:
-            continue
         notes, work, entrypoint, read = scan(t, subagents(sid), a.date)
         changed, calls = changed + 1, calls + read
         if sid == me and not read:
@@ -449,21 +477,25 @@ def main(argv=None):
             f"no tool call could be read from the transcripts changed since {a.date}: "
             "Claude Code's transcript format may have changed, or no session used a tool"
         )
-    # a snapshot counts for the session it describes, not for the one that wrote it (this session
-    # included, which is then left out of the report)
+    # a snapshot a run of this report wrote (this session included, which is then left out of the
+    # report) counts for the session it describes. Another session's write of it stays its own
+    # note: it works from it
     for sid, (_, notes, _) in found.items():
-        for path in list(notes):
+        for path, ts in list(notes.items()):
             m = SNAPSHOT.search(path)
-            if not m or sid.startswith(m.group(1)):
+            if not m:
                 continue
+            run = (sid in reports or sid == me) and not sid.startswith(m.group(1))
+            last[path] = max(last.get(path, (ts, run)), (ts, run))
             source = next((s for s in found if s.startswith(m.group(1))), None)
-            if source:
-                ts, own = notes.pop(path), found[source][1].get(path)
+            if run and source:
+                own = found[source][1].get(path)
+                del notes[path]
                 if own is None or ts > own:  # unless the session edited it later itself
                     found[source][1][path] = ts
                     credited.add(path)
-                    # written last by a run of this report, not by a session working from it
-                    (ours.add if sid in reports or sid == me else ours.discard)(path)
+    # written last by a run of this report, not by a session working from it
+    ours = {path for path, (_, run) in last.items() if run}
     found.pop(me, None)
     names = Counter(live.values())
 
@@ -480,8 +512,9 @@ def main(argv=None):
         usable = {n: ts for n, ts in notes.items() if titles[n] is not None}
         # a snapshot fills a gap: once the session's own note covers it (written after it, or at
         # most SNAPSHOT_STALE_AFTER calls before it), that note replaces it. Found by name and on
-        # disk, so one the session marked superseded itself is still reported as replaced; one a
-        # session edited without marking it is a note someone works from, and stays
+        # disk, so one marked superseded is still reported as replaced, whenever the banner went
+        # in (that edit is its last write); one a session edited without marking it is a note
+        # someone works from, and stays
         snaps = [n for n in notes if sid[:8] in SNAPSHOT.findall(n)]
         own = {n: ts for n, ts in usable.items() if n not in snaps}
         # one named for another day is likely about other work: only if there is no other
@@ -492,8 +525,14 @@ def main(argv=None):
             for n in snaps
             if mine
             and os.path.exists(n)
-            and (n in ours or titles[n] is None)
-            and sum(own[mine] < w <= notes[n] for w in work) <= SNAPSHOT_STALE_AFTER
+            and (
+                titles[n] is None
+                or (
+                    n in ours
+                    and sum(own[mine] < w <= notes[n] for w in work)
+                    <= SNAPSHOT_STALE_AFTER
+                )
+            )
         ]
         usable = {n: ts for n, ts in usable.items() if n not in replaced}
         if usable:

@@ -51,7 +51,7 @@ If it fails (it reads Claude Code internals, which can change), say so and stop.
 | `closed-none` | no longer running, 30+ tool calls, no note |
 | `replaced` | a snapshot the session's own note now covers; `title` holds that note's path |
 
-A snapshot is a note named `handoff_<date>_snapshot-<sid8>.md`, written by step 5 from that session's transcript; it counts for that session. Sessions with no note and under 30 tool calls (a quick question) are left out.
+A snapshot is a note named `handoff_<date>_snapshot-<sid8>.md`, written by step 5 from that session's transcript; it counts for that session. A session that edits it makes it its own note, which step 5 won't replace. Sessions with no note and under 30 tool calls (a quick question) are left out.
 
 ### 2. Write the list
 
@@ -122,10 +122,10 @@ Once every subagent has replied, re-run steps 1 and 2 here: each snapshot now co
 
 ## Limits
 
-- The check relies on Claude Code's local session registry and transcript format, which are not a documented interface. `claude agents --json` is documented, but lists no sessions inside Claude Code's Bash sandbox.
+- The check relies on Claude Code's local session registry and transcript format, which are not a documented interface. A registry that moves isn't noticed: every session then reads as closed. `claude agents --json` is documented, but lists no sessions inside Claude Code's Bash sandbox.
 - Notes are found through this machine's transcripts, from Write, Edit and NotebookEdit calls. A note written through the shell isn't found, and a synced note is listed only on the machine that wrote it.
 - A note is a `.md` file whose name contains "handoff", or a dated one in a `handoff/` or `handoffs/` directory with no "body" in its name (a PR or issue body; other drafts kept there count), outside `memory/`, temp dirs and git worktrees. It is listed if it still exists, doesn't open with a line like `> SUPERSEDED by <path>` or `> COMPANION of <path>` (a note kept on purpose beside another), and any date in its name falls between the day wrapped up and 3 days after it; otherwise the session's latest usable note is listed.
-- A snapshot is `replaced` once the session's newest own note (named for that day, if it has one) covers it: written after it, or at most 5 calls before it, even if that note is about other work. Only a snapshot a run of this skill wrote last, or one marked SUPERSEDED, can be replaced.
+- A snapshot is `replaced` once the session's newest own note (named for that day, if it has one) covers it: written after it, or at most 5 calls before it, even if that note is about other work. Only a snapshot a run of this skill wrote last can be replaced; one marked SUPERSEDED always is.
 - The daily note keeps a hidden comment naming every path it has listed, deleted lines' too. Remove a path from it to have that note listed again.
 - A session whose first tool call runs the check or loads this skill is a run of this skill: it is never listed as lacking a note, even if it did other work later. Its notes, and snapshots of it, are still listed.
 - A snapshot's freshness counts from when it was written, not from where its log ends: calls a busy session makes while the snapshot is being written count as covered.

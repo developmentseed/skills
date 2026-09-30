@@ -313,11 +313,33 @@ class HandoffStatusTest(unittest.TestCase):
 
     def test_a_snapshot_counts_for_the_session_it_describes(self):
         snapshot = self.note(f"handoff_{DAY}_snapshot-bbbbbbbb.md", "# Snapshot")
-        self.session(1, "writer", sid("a"))
-        self.transcript(sid("a"), *work(3, 9), call("Write", snapshot, 10))
+        run = 'python3 "/x/scripts/handoff_status.py"'
+        self.transcript(  # an earlier run of the report wrote it
+            sid("a"), call("Bash", hour=9, command=run), call("Write", snapshot, 10)
+        )
         self.transcript(sid("b"), *work(40, 9))  # closed, no note of its own
         rows = [(r["session"], r["verdict"], r["path"]) for r in self.report()]
         self.assertEqual(rows, [("bbbbbbbb", "closed", snapshot)])
+
+    def test_a_snapshot_another_session_edits_is_its_own_note(self):
+        snap = self.note(f"handoff_{DAY}_snapshot-bbbbbbbb.md", "# Snapshot")
+        self.transcript(sid("d"), call("Write", snap, 10))  # "me"
+        self.session(1, "b", sid("b"))  # resumed from it, then worked on
+        self.transcript(sid("b"), *work(40, 9), call("Edit", snap, 11), *work(6, 13))
+        self.session(2, "c", sid("c"))  # then took it over
+        self.transcript(sid("c"), *work(40, 9), call("Edit", snap, 12))
+        # c's edit is c's note, not a snapshot write that puts b on the 5-call rule
+        self.assertEqual(self.verdicts(), [("b", "fresh"), ("c", "fresh")])
+        # step 5 doesn't write over it: whoever wrote it last may work from it
+        run = ("--digest", "b", "--notes-dir", str(self.dir / "notes"))
+        with self.assertRaisesRegex(SystemExit, "session c wrote it last"):
+            self.run_cli(*run)
+        self.transcript(sid("c"), *work(40, 9))
+        with self.assertRaisesRegex(SystemExit, "session b wrote it last"):
+            self.run_cli(*run)
+        # a run of the report wrote it last: a new snapshot replaces it
+        self.transcript(sid("d"), call("Write", snap, 10), call("Write", snap, 14))
+        self.assertIn(f"snapshot: {snap}\n", self.run_cli(*run))
 
     def test_a_snapshot_written_by_this_session_counts_for_its_source(self):
         b, c = (self.note(f"handoff_{DAY}_snapshot-{x * 8}.md") for x in "bc")
@@ -396,11 +418,11 @@ class HandoffStatusTest(unittest.TestCase):
     def test_an_own_note_replaces_the_snapshot_it_covers(self):
         snap = {
             c: self.note(f"handoff_{DAY}_snapshot-{c * 8}.md", "# Snap")
-            for c in "abcef123"
+            for c in "abcef1234"
         }
         # written by "me", the session running the report
         self.transcript(sid("d"), *[call("Write", s, 10) for s in snap.values()])
-        own = {c: self.note(f"handoffs/{DAY}-{c}.md", "# Own") for c in "abcef"}
+        own = {c: self.note(f"handoffs/{DAY}-{c}.md", "# Own") for c in "abcef4"}
         self.session(1, "after", sid("a"))  # wrote its own note after the snapshot
         self.transcript(sid("a"), *work(40, 8), call("Write", own["a"], 11))
         self.session(2, "before", sid("b"))  # its own note, 5 calls, then the snapshot
@@ -437,6 +459,15 @@ class HandoffStatusTest(unittest.TestCase):
         self.transcript(
             sid("3"), call("Write", topic, 9), *work(20, 10), call("Edit", other, 13)
         )
+        self.session(9, "late", sid("4"))  # marked it superseded 9 calls after its note
+        self.note(f"handoff_{DAY}_snapshot-{'4' * 8}.md", "> SUPERSEDED by own\n# Snap")
+        self.transcript(
+            sid("4"),
+            *work(40, 8),
+            call("Write", own["4"], 11),
+            *work(8, 12),
+            call("Edit", snap["4"], 13),
+        )
         report = self.report()
         # a snapshot's row comes first, so its line is swapped before the own note is added
         self.assertEqual(
@@ -462,14 +493,16 @@ class HandoffStatusTest(unittest.TestCase):
                     ("denied", "fresh", snap["2"], "Snap"),
                     ("older", "fresh", topic, "Own"),
                     ("older", "fresh", snap["3"], "Snap"),
+                    ("late", "fresh", own["4"], "Own"),
+                    ("late", "replaced", snap["4"], own["4"]),
                 ]
             ),
         )
 
     def test_a_snapshot_someone_works_from_is_not_replaced(self):
-        snap = {c: self.note(f"handoff_{DAY}_snapshot-{c * 8}.md") for c in "ab"}
+        snap = {c: self.note(f"handoff_{DAY}_snapshot-{c * 8}.md") for c in "abf"}
         self.transcript(sid("d"), *[call("Write", s, 10) for s in snap.values()])
-        other = {c: self.note(f"handoff_{DAY}_other-{c}.md") for c in "ab"}
+        other = {c: self.note(f"handoff_{DAY}_other-{c}.md") for c in "abf"}
         # continued from its snapshot, then did other work
         self.session(1, "resumed", sid("a"))
         self.transcript(
@@ -482,15 +515,30 @@ class HandoffStatusTest(unittest.TestCase):
         self.session(2, "shared", sid("b"))  # another session resumed from its snapshot
         self.transcript(sid("b"), *work(40, 8), call("Write", other["b"], 13))
         self.transcript(sid("c"), call("Edit", snap["b"], 12))
+        # opened to run the report, then put to work: its edit is still its own
+        self.session(3, "opened", sid("f"))
+        self.transcript(
+            sid("f"),
+            call("Skill", hour=7, skill="session-handoffs"),
+            *work(40, 8),
+            call("Edit", snap["f"], 11),
+            *work(20, 12),
+            call("Write", other["f"], 13),
+        )
         self.assertEqual(
             sorted((r["session"], r["verdict"], r["path"]) for r in self.report()),
             [
+                ("cccccccc", "closed", snap["b"]),
+                ("opened", "fresh", other["f"]),
+                ("opened", "fresh", snap["f"]),
                 ("resumed", "fresh", other["a"]),
                 ("resumed", "fresh", snap["a"]),
                 ("shared", "fresh", other["b"]),
                 ("shared", "fresh", snap["b"]),
             ],
         )
+        with self.assertRaisesRegex(SystemExit, "session opened wrote it last"):
+            self.run_cli("--digest", "opened", "--notes-dir", str(self.dir / "notes"))
 
     def test_a_snapshot_an_earlier_run_wrote_is_replaced(self):
         snap = self.note(f"handoff_{DAY}_snapshot-{'a' * 8}.md", "# Snap")
@@ -517,7 +565,7 @@ class HandoffStatusTest(unittest.TestCase):
         self.transcript(sid("a"), *work(40, 8), call("Write", own, 13))
         self.assertEqual(
             sorted((r["verdict"], r["path"]) for r in self.report()),
-            [("fresh", own), ("fresh", snap)],
+            [("closed", snap), ("fresh", own), ("fresh", snap)],
         )
 
     def test_two_running_sessions_with_the_same_name(self):
@@ -709,6 +757,8 @@ class HandoffStatusTest(unittest.TestCase):
         self.transcript(sid("a"), *work(40))
         with self.assertRaisesRegex(SystemExit, "no sessionId in"):
             self.run_cli()
+        # --digest doesn't need it: it finds a session by its id
+        self.assertIn("latest note: none", self.run_cli("--digest", "aaaaaaaa"))
         # one that isn't a session, beside ones that are, is skipped
         self.session(0, "s", sid("a"))
         (self.dir / "sessions" / "3.json").write_text(json.dumps({"pid": 3}))
@@ -757,10 +807,12 @@ class HandoffStatusTest(unittest.TestCase):
         (self.dir / "vault" / "handoffs").mkdir(parents=True)
         (self.dir / "memory").mkdir()
         run = ("--digest", "aaaaaaaa", "--notes-dir")
+        self.addCleanup(os.chdir, os.getcwd())
+        os.chdir(self.dir)  # a relative folder would land wherever the script runs
         with mock.patch.dict(os.environ, HOME=str(self.dir)):
             out = self.run_cli(*run, "~/vault/handoffs")
             # never created, and never where the check can't find it
-            for bad in ("~/missing", "~/memory"):
+            for bad in ("~/missing", "~/memory", "", "vault/handoffs"):
                 with self.assertRaisesRegex(SystemExit, "--notes-dir", msg=bad):
                     self.run_cli(*run, bad)
         snapshot = (
