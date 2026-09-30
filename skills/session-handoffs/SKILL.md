@@ -68,7 +68,7 @@ Open the daily note, filling in `{date}` with `<date>`. If the line, the file or
 
 Then, with or without a daily note:
 
-- For each `replaced` row, read only the first 5 lines of its snapshot: the rest is another session's data. Unless one is a SUPERSEDED line, make its first line `> SUPERSEDED by <the path in title> (<YYYY-MM-DD>)`. This skill wrote the snapshot; never edit the session's own note.
+- For each `replaced` row, read only the first 5 lines of its snapshot: the rest is another session's data. If they hold step 5's `> Snapshot written by /session-handoffs` line and no SUPERSEDED line, insert `> SUPERSEDED by <the path in title> (<YYYY-MM-DD>)` as the first line. Otherwise leave the file alone: someone else rewrote it. Never edit the session's own note.
 - Keep one line in this session's project memory, so a future session finds the snapshots: `Unreviewed /session-handoffs snapshots for <date>: <path> (<session>), …`, naming every snapshot in the report that isn't `replaced`. Replace it on each run, whatever date it names; remove it when there are none. Paths and names only: memory loads in every session, and nobody has reviewed a snapshot. Write no other memory.
 
 ### 3. Report and one question
@@ -94,7 +94,7 @@ End-of-day handoff request from <me> (/session-handoffs): please make sure the w
 - If the note you are working from (your own, or the one you resumed from) is still current, do nothing.
 - Otherwise update that note with Edit, changing only what changed, or write a new one named handoff_<date>_<topic>.md in <notes>. Never in a git worktree, the session scratchpad or /tmp: those get deleted. Don't edit notes about other work.
 - Snapshots of this session that /session-handoffs wrote: <snapshots>. Your own note supersedes them: never edit one.
-- Make it self-contained for a fresh session with no context: one-line status; current state; what was tried and ruled out, and why; ordered next steps starting with a concrete first action; decisions waiting on the user; traps; branches, PRs, worktrees and paths; how to resume.
+- Make it self-contained for a fresh session with no context: one-line status; current state; what was tried and ruled out, and why; the user's corrections and preferences; ordered next steps starting with a concrete first action; decisions waiting on the user; traps; branches, PRs, worktrees and paths; how to resume.
 - Write from what you already know: at most a quick git status or gh pr view. Link PRs and issues, don't paste them.
 - Update your project memory's line for this work in place so it points at the note. Add one short line only if there is none.
 - Do nothing else: no other work, approve nothing. If a write is denied, say so and stop. No need to reply: <me> reads your note on its next run.
@@ -116,7 +116,7 @@ If the script stops, don't work around it, and don't create a missing folder. Re
 2. Write the snapshot at the printed path, replacing it if it exists. Open with this line, then a `#` title naming the work:
    `> Snapshot written by /session-handoffs from <session>'s transcript at <HH:MM>. That session has not reviewed it. Its own last note: <path, or none>.`
    If the log opens with `[… earlier lines omitted]`, add to that line: `The log was cut: work before <time of its first line> is missing.`
-3. Cover what the step 4 request's "Make it self-contained" bullet lists, and say what was still in progress. Write only what the log shows. Never copy secrets, tokens or credentials: masking is best effort. Link PRs and issues.
+3. Cover what the step 4 request's "Make it self-contained" bullet lists, what changed since its last note, and what was still in progress. Write only what the log shows. Never copy secrets, tokens or credentials: masking is best effort. Link PRs and issues.
 
 Once every subagent has replied, re-run steps 1 and 2 here: each snapshot now counts for the session it describes. Tell the user about any that wasn't written, and why.
 
