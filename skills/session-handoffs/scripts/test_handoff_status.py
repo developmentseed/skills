@@ -351,15 +351,16 @@ class HandoffStatusTest(unittest.TestCase):
         rows = [(r["session"], r["verdict"], r["path"]) for r in self.report()]
         self.assertEqual(rows, [("bbbbbbbb", "closed", b), ("cccccccc", "closed", c)])
 
-    def test_a_snapshot_written_after_running_the_report_counts_for_its_source(self):
-        # a run from a working session: its step-5 subagent ran --digest first, and its own
-        # conversation ran the check before writing the other one
+    def test_a_snapshot_a_subagent_writes_counts_for_its_source(self):
+        # a run from a working session: its step-5 subagent writes a snapshot, which counts for
+        # the session it describes. What its own conversation writes, even after running the
+        # check, is a note it works from
         run = 'python3 "/x/scripts/handoff_status.py"'
         b, c, e = (self.note(f"handoff_{DAY}_snapshot-{x * 8}.md") for x in "bce")
         self.session(1, "w", sid("a"))
         self.transcript(
             sid("a"),
-            call("Edit", e, 8),  # before the run: it works from that one
+            call("Edit", e, 8),
             *work(40, 9),
             call("Bash", hour=12, command=run),
             call("Write", c, 13),
@@ -376,16 +377,17 @@ class HandoffStatusTest(unittest.TestCase):
             sorted((r["session"], r["verdict"], r["path"]) for r in self.report()),
             [
                 ("bbbbbbbb", "closed", b),
-                ("cccccccc", "closed", c),
+                ("cccccccc", "closed-none", "-"),
                 ("eeeeeeee", "closed-none", "-"),
-                ("w", "stale", e),
+                ("w", "fresh", c),
+                ("w", "fresh", e),
             ],
         )
-        # so step 5 may write over it
-        out = self.run_cli(
-            "--digest", "bbbbbbbb", "--notes-dir", str(self.dir / "notes")
-        )
-        self.assertIn(f"snapshot: {b}\n", out)
+        # so step 5 may write over the subagent's, not over one w works from
+        notes = ("--notes-dir", str(self.dir / "notes"))
+        self.assertIn(f"snapshot: {b}\n", self.run_cli("--digest", "bbbbbbbb", *notes))
+        with self.assertRaisesRegex(SystemExit, "session w wrote it last"):
+            self.run_cli("--digest", "cccccccc", *notes)
 
     def test_step_5_may_write_over_a_snapshot_marked_superseded(self):
         snap = self.note(

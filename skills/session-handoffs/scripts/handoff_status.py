@@ -23,7 +23,7 @@ A note is a .md file whose name contains "handoff", or a dated one in a handoff(
 - Listed: its notes that still exist, don't open with a SUPERSEDED banner or a COMPANION line,
   and have any date in their name between --date and 3 days after it. If none qualify, its
   latest usable note. A snapshot named ..._snapshot-<sid8>.md that a run of the report writes
-  (a session opened for it, or one that ran this script before the write) counts for the session
+  (a session opened for it, or any session's subagent, as in step 5) counts for the session
   it describes, not its writer; another session's write of it is that session's own note. It
   counts until the session's own note (its newest named for --date, else its newest) covers it:
   written after it, or at most 5 calls before it (replaced). Only a snapshot a run of the report
@@ -292,12 +292,13 @@ def transcripts(claude_dir, day):
 
 
 def scan(transcript, subagents, day):
-    """Return ({note path: last write time}, {notes whose last write a run of this report made},
+    """Return ({note path: last write time}, {notes whose last write came from a subagent},
     [work times], entrypoint, tool calls read) from the start of `day`. Work is every tool call in
     the main conversation plus file edits by subagents: their reads are noise, their edits (new
     worktrees, files) are what a handoff must mention. The entrypoint (cli, sdk-py, …) tells an
     interactive session from automation."""
-    notes, work, entrypoint, calls, ran = {}, [], None, 0, None
+    # last: note path -> (last write, whether a subagent made it)
+    last, work, entrypoint, calls = {}, [], None, 0
     for f in (transcript, *subagents):
         for ts, entry in entries(f, start_of(day), needle='"tool_use"'):
             if entry.get("type") != "assistant":
@@ -309,18 +310,18 @@ def scan(transcript, subagents, day):
                     continue
                 calls += 1
                 i = block.get("input") or {}
-                if REPORT_RUN.search(str(i.get("command"))):
-                    ran = min(ts, ran or ts)
                 path = str(i.get("file_path") or i.get("notebook_path") or "")
                 edit = block.get("name") in FILE_TOOLS
                 if edit and is_note(path):
-                    notes[path] = max(ts, notes.get(path, ts))
+                    last[path] = max(
+                        last.get(path, (ts, False)), (ts, f is not transcript)
+                    )
                 if f is transcript or (edit and not path.startswith(TEMP_ROOTS)):
                     work.append(ts)
-    # a write once the session has run this script is a run's: step 5's subagent, or a run from
-    # a working session
-    runs = {n for n, ts in notes.items() if ran and ts >= ran}
-    return notes, runs, work, entrypoint, calls
+    # step 5 writes each snapshot from a subagent, so a subagent's write is a run's. A session's
+    # own conversation works from what it writes, even after it ran this script
+    runs = {n for n, (_, sub) in last.items() if sub}
+    return {n: ts for n, (ts, _) in last.items()}, runs, work, entrypoint, calls
 
 
 def main(argv=None):
