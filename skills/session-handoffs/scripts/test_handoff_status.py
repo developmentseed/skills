@@ -492,6 +492,34 @@ class HandoffStatusTest(unittest.TestCase):
             ],
         )
 
+    def test_a_snapshot_an_earlier_run_wrote_is_replaced(self):
+        snap = self.note(f"handoff_{DAY}_snapshot-{'a' * 8}.md", "# Snap")
+        own = self.note(f"handoff_{DAY}_own.md", "# Own")
+        run = 'python3 "/x/scripts/handoff_status.py"'
+        # an earlier run of the report, not this one, wrote the snapshot
+        self.transcript(
+            sid("b"), call("Bash", hour=9, command=run), call("Write", snap, 10)
+        )
+        self.session(1, "s", sid("a"))
+        self.transcript(sid("a"), *work(40, 8), call("Write", own, 11))
+        self.assertEqual(
+            [(r["verdict"], r["path"]) for r in self.report()],
+            [("replaced", snap), ("fresh", own)],
+        )
+
+    def test_a_snapshot_edited_after_the_run_is_not_replaced(self):
+        snap = self.note(f"handoff_{DAY}_snapshot-{'a' * 8}.md", "# Snap")
+        own = self.note(f"handoff_{DAY}_own.md", "# Own")
+        self.transcript(sid("d"), call("Write", snap, 10))  # "me"
+        # another session edited it after this run wrote it: someone works from it
+        self.transcript(sid("e"), call("Edit", snap, 12))
+        self.session(1, "s", sid("a"))
+        self.transcript(sid("a"), *work(40, 8), call("Write", own, 13))
+        self.assertEqual(
+            sorted((r["verdict"], r["path"]) for r in self.report()),
+            [("fresh", own), ("fresh", snap)],
+        )
+
     def test_two_running_sessions_with_the_same_name(self):
         self.session(1, "s", sid("a"))
         self.session(2, "s", sid("b"))
