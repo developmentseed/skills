@@ -351,6 +351,67 @@ class HandoffStatusTest(unittest.TestCase):
         rows = [(r["session"], r["verdict"], r["path"]) for r in self.report()]
         self.assertEqual(rows, [("bbbbbbbb", "closed", b), ("cccccccc", "closed", c)])
 
+    def test_a_snapshot_written_after_running_the_report_counts_for_its_source(self):
+        # a run from a working session: its step-5 subagent ran --digest first, and its own
+        # conversation ran the check before writing the other one
+        run = 'python3 "/x/scripts/handoff_status.py"'
+        b, c, e = (self.note(f"handoff_{DAY}_snapshot-{x * 8}.md") for x in "bce")
+        self.session(1, "w", sid("a"))
+        self.transcript(
+            sid("a"),
+            call("Edit", e, 8),  # before the run: it works from that one
+            *work(40, 9),
+            call("Bash", hour=12, command=run),
+            call("Write", c, 13),
+        )
+        self.transcript(
+            sid("a"),
+            call("Bash", hour=12, command=f"{run} --digest b"),
+            call("Write", b, 12),
+            sub="agent-1",
+        )
+        for x in "bce":
+            self.transcript(sid(x), *work(40, 9))
+        self.assertEqual(
+            sorted((r["session"], r["verdict"], r["path"]) for r in self.report()),
+            [
+                ("bbbbbbbb", "closed", b),
+                ("cccccccc", "closed", c),
+                ("eeeeeeee", "closed-none", "-"),
+                ("w", "stale", e),
+            ],
+        )
+        # so step 5 may write over it
+        out = self.run_cli(
+            "--digest", "bbbbbbbb", "--notes-dir", str(self.dir / "notes")
+        )
+        self.assertIn(f"snapshot: {b}\n", out)
+
+    def test_step_5_may_write_over_a_snapshot_marked_superseded(self):
+        snap = self.note(
+            f"handoff_{DAY}_snapshot-bbbbbbbb.md", "> SUPERSEDED by x.md\n# Snap"
+        )
+        run = ("--digest", "bbbbbbbb", "--notes-dir", str(self.dir / "notes"))
+        # nobody works from it, whether the session it describes marked it or another did
+        self.transcript(sid("b"), *work(40, 9), call("Edit", snap, 11))
+        self.assertIn(f"snapshot: {snap}\n", self.run_cli(*run))
+        own = self.note(f"handoff_{DAY}_c.md", "# C")
+        self.transcript(
+            sid("c"), *work(40, 9), call("Edit", snap, 12), call("Write", own, 12)
+        )
+        self.assertIn(f"snapshot: {snap}\n", self.run_cli(*run))
+        # a note kept on purpose beside another is still someone's
+        Path(snap).write_text("> COMPANION of x.md\n> SUPERSEDED by x.md\n# Snap")
+        with self.assertRaisesRegex(SystemExit, "session cccccccc wrote it last"):
+            self.run_cli(*run)
+        # once a run writes over it, the edits before are gone from it: it is b's again
+        Path(snap).write_text("# Snap")
+        self.transcript(sid("d"), call("Write", snap, 14))  # "me"
+        self.assertEqual(
+            sorted((r["session"], r["path"]) for r in self.report()),
+            [("bbbbbbbb", snap), ("cccccccc", own)],
+        )
+
     def test_a_run_of_the_report_is_never_listed_as_lacking_a_note(self):
         run = 'python3 "/x/scripts/handoff_status.py"'
         snapshot = self.note(f"handoff_{DAY}_snapshot-bbbbbbbb.md", "# Snapshot")

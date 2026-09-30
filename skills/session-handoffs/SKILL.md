@@ -51,7 +51,7 @@ If it fails (it reads Claude Code internals, which can change), say so and stop.
 | `closed-none` | no longer running, 30+ tool calls, no note |
 | `replaced` | a snapshot the session's own note now covers; `title` holds that note's path |
 
-A snapshot is a note named `handoff_<date>_snapshot-<sid8>.md`, written by step 5 from that session's transcript; it counts for that session. A session that edits it makes it its own note, which step 5 won't replace. Sessions with no note and under 30 tool calls (a quick question) are left out.
+A snapshot is a note named `handoff_<date>_snapshot-<sid8>.md`, written by step 5 from that session's transcript; it counts for that session. A session that edits it makes it its own note, which step 5 won't replace unless it is marked SUPERSEDED. Sessions with no note and under 30 tool calls (a quick question) are left out.
 
 ### 2. Write the list
 

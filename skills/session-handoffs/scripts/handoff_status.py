@@ -23,10 +23,11 @@ A note is a .md file whose name contains "handoff", or a dated one in a handoff(
 - Listed: its notes that still exist, don't open with a SUPERSEDED banner or a COMPANION line,
   and have any date in their name between --date and 3 days after it. If none qualify, its
   latest usable note. A snapshot named ..._snapshot-<sid8>.md that a run of the report writes
-  counts for the session it describes, not its writer; another session's write of it is that
-  session's own note. It counts until the session's own note (its newest named for --date, else
-  its newest) covers it: written after it, or at most 5 calls before it (replaced). Only a
-  snapshot a run of the report wrote last is replaced; one marked SUPERSEDED always is.
+  (a session opened for it, or one that ran this script before the write) counts for the session
+  it describes, not its writer; another session's write of it is that session's own note. It
+  counts until the session's own note (its newest named for --date, else its newest) covers it:
+  written after it, or at most 5 calls before it (replaced). Only a snapshot a run of the report
+  wrote last is replaced; one marked SUPERSEDED always is.
 
 Prints the day covered and the time now, then TSV after a header: one row per listed note, one
 per session without one, and one per replaced snapshot:
@@ -44,7 +45,7 @@ gets through). NAME is a running session's name; SID8 is the first 8+ characters
 id. It exits with an error instead of printing a path or log a snapshot can't use: a NAME or SID8
 that matches no session or several, a --notes-dir that isn't an absolute path to a folder where
 notes are found, a snapshot that a session other than a run of the report wrote last (it may work
-from it), or an empty log.
+from it) unless it opens with a SUPERSEDED banner, or an empty log.
 """
 
 import argparse
@@ -74,9 +75,10 @@ REPORT_RUN = re.compile(r"python3?\s+\S*/handoff_status\.py")
 # Not "## Superseded options", "superseded in part", or the word in the middle of prose. Also
 # "> COMPANION of <path>": a note kept on purpose beside the current one, which links it. Only
 # that quoted form: many notes open with "Companion notes: …" naming live companions.
+COMPANION = re.compile(r">\W*companion of\b", re.I)
 BANNER = re.compile(
-    r">\W*companion of\b"
-    r"|\W*(?:\d{4}-\d{2}-\d{2}[^:\n]{0,20}:\s*\W*)?superseded\b(?=\s*(?:by\b|as\b|for\b|[.:;,→—–*-]|\d|$))",
+    COMPANION.pattern
+    + r"|\W*(?:\d{4}-\d{2}-\d{2}[^:\n]{0,20}:\s*\W*)?superseded\b(?=\s*(?:by\b|as\b|for\b|[.:;,→—–*-]|\d|$))",
     re.I,
 )
 # a private key block, up to its END line (or the end of the text when it has none); masked
@@ -181,7 +183,7 @@ def dated_for(path, day):
     return not dates or any(day.isoformat() <= d <= ahead for d in dates)
 
 
-def note_title(path):
+def note_title(path, banner=BANNER):
     """Return the note's title (its `#` heading, else its file name), or None if it's gone (a denied
     Write leaves no file) or opens with a SUPERSEDED or COMPANION line (it points to another note)."""
     try:
@@ -196,7 +198,7 @@ def note_title(path):
         )
         lines = lines[end + 1 :]
     head = [line for line in lines if line][:6]
-    if any(BANNER.match(line) for line in head):
+    if any(banner.match(line) for line in head):
         return None
     # a level-2 heading is a section ("## Status"), not the note's title
     heading = next((h[2:].strip() for h in head if h.startswith("# ")), "")
@@ -290,11 +292,12 @@ def transcripts(claude_dir, day):
 
 
 def scan(transcript, subagents, day):
-    """Return ({note path: last write time}, [work times], entrypoint, tool calls read) from the
-    start of `day`. Work is every tool call in the main conversation plus file edits by subagents:
-    their reads are noise, their edits (new worktrees, files) are what a handoff must mention. The
-    entrypoint (cli, sdk-py, …) tells an interactive session from automation."""
-    notes, work, entrypoint, calls = {}, [], None, 0
+    """Return ({note path: last write time}, {notes whose last write a run of this report made},
+    [work times], entrypoint, tool calls read) from the start of `day`. Work is every tool call in
+    the main conversation plus file edits by subagents: their reads are noise, their edits (new
+    worktrees, files) are what a handoff must mention. The entrypoint (cli, sdk-py, …) tells an
+    interactive session from automation."""
+    notes, work, entrypoint, calls, ran = {}, [], None, 0, None
     for f in (transcript, *subagents):
         for ts, entry in entries(f, start_of(day), needle='"tool_use"'):
             if entry.get("type") != "assistant":
@@ -306,13 +309,18 @@ def scan(transcript, subagents, day):
                     continue
                 calls += 1
                 i = block.get("input") or {}
+                if REPORT_RUN.search(str(i.get("command"))):
+                    ran = min(ts, ran or ts)
                 path = str(i.get("file_path") or i.get("notebook_path") or "")
                 edit = block.get("name") in FILE_TOOLS
                 if edit and is_note(path):
                     notes[path] = max(ts, notes.get(path, ts))
                 if f is transcript or (edit and not path.startswith(TEMP_ROOTS)):
                     work.append(ts)
-    return notes, work, entrypoint, calls
+    # a write once the session has run this script is a run's: step 5's subagent, or a run from
+    # a working session
+    runs = {n for n, ts in notes.items() if ran and ts >= ran}
+    return notes, runs, work, entrypoint, calls
 
 
 def main(argv=None):
@@ -403,14 +411,18 @@ def main(argv=None):
                 f"--notes-dir '{tilde(str(a.notes_dir))}': not an absolute path, no such folder, or notes in it aren't found (memory/, temp dirs, git worktrees)"
             )
         # a snapshot someone else wrote last, the session it describes included, is a note they
-        # work from: replacing it would lose their edits
-        if snapshot.exists():
-            writes = {
-                s: scan(s, subagents(s.stem), a.date)[0].get(str(snapshot))
-                for s in transcripts(a.claude_dir, a.date)
-            }
-            by = max((s for s in writes if writes[s]), key=writes.get, default=None)
-            if by and (by == t or (by.stem != me and not opened_for_report(by))):
+        # work from: replacing it would lose their edits. Not once it opens with a SUPERSEDED
+        # banner (and no COMPANION line): nobody works from it then
+        superseded = note_title(snapshot) is None and note_title(snapshot, COMPANION)
+        if snapshot.exists() and not superseded:
+            writes = {}  # session: (its last write of the snapshot, whether a run made it)
+            for s in transcripts(a.claude_dir, a.date):
+                notes, runs = scan(s, subagents(s.stem), a.date)[:2]
+                if str(snapshot) in notes:
+                    writes[s] = notes[str(snapshot)], str(snapshot) in runs
+            by = max(writes, key=writes.get, default=None)
+            run = by and (writes[by][1] or by.stem == me or opened_for_report(by))
+            if by and (by == t or not run):
                 raise SystemExit(
                     f"{tilde(str(snapshot))}: session {live.get(by.stem, by.stem[:8])} wrote it last, "
                     "not a run of /session-handoffs, and may work from it: not replacing it"
@@ -455,11 +467,11 @@ def main(argv=None):
             f"this session's transcript isn't in {tilde(str(projects))}/*/: "
             "Claude Code's transcript layout may have changed"
         )
-    found, reports, credited, last = {}, set(), set(), {}
+    found, reports, credited, last, runs = {}, set(), set(), {}, {}
     changed = calls = 0  # transcripts written in the window, tool calls read from them
     for t in transcripts(a.claude_dir, a.date):
         sid = t.stem
-        notes, work, entrypoint, read = scan(t, subagents(sid), a.date)
+        notes, runs[sid], work, entrypoint, read = scan(t, subagents(sid), a.date)
         changed, calls = changed + 1, calls + read
         if sid == me and not read:
             raise SystemExit(
@@ -485,7 +497,8 @@ def main(argv=None):
             m = SNAPSHOT.search(path)
             if not m:
                 continue
-            run = (sid in reports or sid == me) and not sid.startswith(m.group(1))
+            run = sid in reports or sid == me or path in runs[sid]
+            run = run and not sid.startswith(m.group(1))
             last[path] = max(last.get(path, (ts, run)), (ts, run))
             source = next((s for s in found if s.startswith(m.group(1))), None)
             if run and source:
@@ -496,6 +509,11 @@ def main(argv=None):
                     credited.add(path)
     # written last by a run of this report, not by a session working from it
     ours = {path for path, (_, run) in last.items() if run}
+    # nor is an edit a run has since written over (step 5 rewrites a bannered snapshot)
+    for _, notes, _ in found.values():
+        for path in ours & notes.keys():
+            if notes[path] < last[path][0]:
+                del notes[path]
     found.pop(me, None)
     names = Counter(live.values())
 
