@@ -77,11 +77,11 @@ class HandoffStatusTest(unittest.TestCase):
         path.write_text(body)
         return str(path)
 
-    def session(self, pid, name, session_id, updated=1):
+    def session(self, pid, name, session_id, updated=1, kind="interactive"):
         entry = {
             "name": name,
             "sessionId": session_id,
-            "kind": "interactive",
+            "kind": kind,
             "updatedAt": updated,
         }
         (self.dir / "sessions" / f"{pid}.json").write_text(
@@ -166,6 +166,20 @@ class HandoffStatusTest(unittest.TestCase):
                 ("quiet-one", "none"),
                 ("stale-one", "stale"),
             ],
+        )
+
+    def test_background_sessions_count_as_running(self):
+        # `claude --bg` sessions are registered with kind "bg": running, and reachable by --ask
+        note = self.note(f"handoff_{DAY}_a.md")
+        self.session(1, "bg-note", sid("a"), kind="bg")
+        self.transcript(sid("a"), call("Write", note, 10))
+        self.session(2, "bg-busy", sid("b"), kind="bg")
+        self.transcript(sid("b"), *work(30))
+        self.session(3, "other", sid("c"), kind="other")  # not a working session
+        self.transcript(sid("c"), *work(30))
+        self.assertEqual(
+            self.verdicts(),
+            [("bg-busy", "none"), ("bg-note", "fresh"), ("cccccccc", "closed-none")],
         )
 
     def test_staleness_counts_main_calls_and_subagent_edits(self):

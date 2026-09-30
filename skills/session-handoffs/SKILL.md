@@ -83,7 +83,7 @@ Nothing is pending after this: re-run the skill any time to pick up new notes.
 
 ### 4. `--ask NAME`: one request, no waiting
 
-1. Load `ListAgents` and `SendMessage` with ToolSearch (`select:ListAgents,SendMessage`) and call `ListAgents`. Ask only local interactive sessions whose row says idle. For one that is busy or not listed, say so and offer `--from-transcript`: a message to a busy session is read between its tool calls, in the middle of its task.
+1. Load `ListAgents` and `SendMessage` with ToolSearch (`select:ListAgents,SendMessage`) and call `ListAgents`. Ask only local interactive or `bg` sessions whose row says idle. For one that is busy or not listed, say so and offer `--from-transcript`: a message to a busy session is read between its tool calls, in the middle of its task.
 2. Send each one a `SendMessage` with the request below, and no `notify_when_idle`. Don't wait for anything. If the result says the message is held for approval, tell the user.
 3. Re-run step 1 later to pick up the note.
 

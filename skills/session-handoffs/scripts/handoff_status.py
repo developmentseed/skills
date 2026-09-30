@@ -61,6 +61,8 @@ TEMP_ROOTS = ("/tmp/", "/private/tmp/", "/var/folders/", "/private/var/folders/"
 STALE_AFTER = 30  # work after the latest note that makes it out of date
 SNAPSHOT_STALE_AFTER = 5  # a snapshot can't know what came after it
 MIN_WORK = 30  # below this, a session without a note is not worth reporting
+# registry kinds of a running working session: interactive, and `claude --bg` sessions
+LIVE_KINDS = ("interactive", "bg")
 # a note may be named for a day up to this far ahead (written on Friday for Monday)
 AHEAD_DAYS = 3
 FILE_TOOLS = ("Write", "Edit", "NotebookEdit")
@@ -369,7 +371,7 @@ def main(argv=None):
         except (OSError, ValueError, AttributeError):
             continue
         registered = registered or bool(sid)
-        if sid and sid != me and s.get("kind", "interactive") == "interactive":
+        if sid and sid != me and s.get("kind", "interactive") in LIVE_KINDS:
             live[sid] = s.get("name") or sid[:8]
 
     def subagents(sid):
