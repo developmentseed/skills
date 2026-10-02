@@ -4,9 +4,7 @@ import contextlib
 import io
 import json
 import os
-import shlex
 import shutil
-import subprocess
 import tempfile
 import unittest
 from datetime import date, timedelta
@@ -473,18 +471,6 @@ class Claims(unittest.TestCase):
         self.assertEqual(kickoff.claims(others, {snap}, self.claude), {snap: work})
 
 
-class Terminal(unittest.TestCase):
-    @unittest.skipUnless(shutil.which("osacompile"), "macOS only")
-    def test_script_compiles(self):
-        r = subprocess.run(
-            ["osacompile", "-o", os.devnull, "-"],
-            input=kickoff.TAB,
-            capture_output=True,
-            text=True,
-        )
-        self.assertEqual(r.returncode, 0, r.stderr)
-
-
 class Main(unittest.TestCase):
     def setUp(self):
         self.root = tmp(self)
@@ -526,7 +512,7 @@ class Main(unittest.TestCase):
         os.environ.update(CLAUDE_CONFIG_DIR=str(self.claude), CLAUDE_CODE_SESSION_ID=ME)
         self.pdir = pdir
 
-    def run_main(self, *args, launch=lambda cmd: mock.Mock(stdout="42\n")):
+    def run_main(self, *args, launch=lambda cmd: mock.Mock()):
         calls = []
 
         def fake_run(cmd, **kw):
@@ -551,9 +537,8 @@ class Main(unittest.TestCase):
             "<estimate>"
         )
 
-    def test_the_question_is_one_line_naming_the_note(self):
-        # a tab gets it typed as one command; a session claims its note by its first prompt
-        self.assertNotIn("\n", kickoff.PROMPT)
+    def test_the_question_names_the_note(self):
+        # a session claims its note by its first prompt
         self.assertIn(str(self.free), kickoff.PROMPT.format(note=self.free))
 
     def test_dry_run_reports_each_open_item_and_opens_nothing(self):
@@ -646,42 +631,13 @@ class Main(unittest.TestCase):
             ],
         )
 
-    def test_tabs_open_a_window_then_tabs_in_it_with_the_config_dir(self):
-        rows, calls = self.run_main("--open", "tabs")
-        self.assertEqual((rows["1"][1], rows["6"][1]), ("opened", "opened"))
-        self.assertEqual(
-            [c[:2] + c[3:] for c, _ in calls],
-            [["osascript", "-", ""], ["osascript", "-", "42"]],
-        )
-        cd, _, run = calls[0][0][2].partition(" && ")
-        self.assertEqual(shlex.split(cd), ["cd", str(self.proj)])
-        self.assertEqual(
-            shlex.split(run)[:2], [f"CLAUDE_CONFIG_DIR={self.claude}", "exec"]
-        )
-        self.assertEqual(
-            shlex.split(run)[3:], ["-n", "free-work", self.prompt(self.free)]
-        )
-
-    def test_windows_open_a_window_each(self):
-        _, calls = self.run_main("--open", "windows")
-        self.assertEqual([c[3] for c, _ in calls], ["", ""])
-
     def refuse(self, cmd):
-        raise kickoff.subprocess.CalledProcessError(
-            1, cmd, stderr="osascript is not allowed to send keystrokes. (1002)"
-        )
+        raise kickoff.subprocess.CalledProcessError(1, cmd, stderr="no such\nproject")
 
-    def test_a_failed_tab_stops_the_rest(self):
-        rows, calls = self.run_main("--open", "tabs", launch=self.refuse)
-        self.assertEqual(
-            rows["1"][1], "failed: osascript is not allowed to send keystrokes. (1002)"
-        )
-        self.assertEqual((rows["6"][1], rows["8"][1]), ("not tried", "not tried"))
-        self.assertEqual(len(calls), 1)
-
-    def test_other_failures_do_not_stop_the_rest(self):
+    def test_a_failure_is_reported_and_does_not_stop_the_rest(self):
         rows, calls = self.run_main(launch=self.refuse)
-        self.assertTrue(rows["6"][1].startswith("failed"))
+        self.assertEqual(rows["1"][1], "failed: no such project")
+        self.assertEqual(rows["6"][1], "failed: no such project")
         self.assertEqual(len(calls), 3)  # item 8 retries the note item 1 failed to open
 
 

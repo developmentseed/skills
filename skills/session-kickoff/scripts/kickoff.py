@@ -1,11 +1,7 @@
 #!/usr/bin/env python3
 """Start a Claude Code session for each open item of the daily note's focus list that links a
-handoff note, asking it to read the note and say what to do next.
-
---open agents (default): background sessions, listed together by `claude agents`.
---open tabs: tabs of one new Terminal window, opened with ⌘T, which needs Accessibility
-  permission for the app running this.
---open windows: a Terminal window each.
+handoff note, asking it to read the note and say what to do next. The sessions run in the
+background (`claude --bg`), listed together by `claude agents`.
 
 The focus list runs from the heading to the next heading of its level or higher, or a --- rule.
 An item is a top-level "- " or "1. " line in it; one checked "[x]" or cancelled "[-]" is
@@ -32,7 +28,7 @@ documented interface.
 
 Prints TSV, one row per open item:  item  status  name  dir  note  title
 status: opened | would open (--dry-run) | open in <session> | no note | missing | superseded |
-        failed: … | not tried (after a failed tab)
+        failed: …
         + " · carried Nd" when the date in the note's name is N ≥ 3 working days before
         today: a prompt to drop, delegate or do it
 
@@ -48,13 +44,11 @@ import functools
 import json
 import os
 import re
-import shlex
-import shutil
 import subprocess
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
-# one line, for a tab to type; --digest picks the reply's "Next:" line
+# --digest picks the reply's "Next:" line
 PROMPT = (
     "Can you open {note} and tell me what I should do next? End with one plain line, no "
     "formatting: Next: <one step> · Needs me: yes/no · Time: <estimate>"
@@ -85,35 +79,6 @@ NOT_ASKED = ("<command-name>", "<local-command-", "<bash-", "<task-notification>
 # the answer's own "Next:" line, bold or not ("Next: x", "**Next step:** x"), with its text on
 # that line; not "> Next: x" quoted from the note, "Next week: x" or "Next.js: x"
 NEXT = re.compile(r"^[ \t]*[-*_#]*[ \t]*Next(?: steps?)?[*_]*:[*_]*[ \t]*(\S.*)$", re.M)
-# Terminal can't be scripted to make a tab, so press ⌘T. Type the command only into a tab whose
-# tty is new: if the keystroke went elsewhere, typing into the selected tab would feed it to
-# whatever runs there, maybe another Claude session.
-TAB = """
-on run {cmd, wid}
-    tell application "Terminal"
-        activate
-        if wid is "" then
-            do script cmd
-            return id of front window
-        end if
-        set w to window id (wid as integer)
-        set index of w to 1
-        set oldTtys to tty of every tab of w
-    end tell
-    tell application "System Events" to keystroke "t" using command down
-    repeat 30 times
-        delay 0.1
-        tell application "Terminal"
-            set t to selected tab of w
-            if tty of t is not "" and oldTtys does not contain tty of t then
-                do script cmd in t
-                return wid
-            end if
-        end tell
-    end repeat
-    error "⌘T didn't open a new tab in the kickoff window"
-end run
-"""
 
 
 def tilde(path):
@@ -477,37 +442,6 @@ def digest(todo, state, live, claude_dir, me):
     return rows
 
 
-def start(how, window, where, name, prompt):
-    """Start `claude -n name prompt` in `where`: in the background (agents), in a new Terminal
-    window (windows, or the first of tabs), or in a new tab of `window` (tabs). Return the
-    Terminal window's id, or None."""
-    if how == "agents":
-        subprocess.run(
-            ["claude", "--bg", "-n", name, prompt],
-            cwd=where,
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-        return None
-    claude = shutil.which("claude") or "claude"
-    # the Terminal shell doesn't inherit this environment: carry the config dir across
-    config = os.environ.get("CLAUDE_CONFIG_DIR")
-    env = f"CLAUDE_CONFIG_DIR={shlex.quote(config)} " if config else ""
-    cmd = (
-        f"cd {shlex.quote(where)} && {env}exec {shlex.quote(claude)} "
-        f"-n {shlex.quote(name)} {shlex.quote(prompt)}"
-    )
-    out = subprocess.run(
-        ["osascript", "-", cmd, (window or "") if how == "tabs" else ""],
-        input=TAB,
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    return out.stdout.strip()
-
-
 def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     p.add_argument("note", type=Path, help="the daily note")
@@ -516,12 +450,6 @@ def main(argv=None):
     )
     p.add_argument(
         "--only", type=int, nargs="+", metavar="N", help="open only these items"
-    )
-    p.add_argument(
-        "--open",
-        choices=("agents", "tabs", "windows"),
-        default="agents",
-        help="where the sessions go (default: agents)",
     )
     p.add_argument("--dry-run", action="store_true", help="report, open nothing")
     p.add_argument(
@@ -569,7 +497,7 @@ def main(argv=None):
     except (OSError, ValueError):
         known = []
 
-    taken, window, failed = {name for name, _ in live.values()}, None, False
+    taken = {name for name, _ in live.values()}
     rows = [("item", "status", "name", "dir", "note", "title")]
     for i, text, note in todo:
         t = title(text) or (note.stem if note else "")
@@ -584,17 +512,19 @@ def main(argv=None):
             where = project_dir(note, a.claude_dir, known) or os.getcwd()
             name = slug(t, taken)
             status = "would open"
-            if failed:  # ⌘T may be landing in another app: press no more
-                status = "not tried"
-            elif not a.dry_run:
+            if not a.dry_run:
                 try:
-                    prompt = PROMPT.format(note=tilde(note))
-                    window = start(a.open, window, where, name, prompt)
+                    subprocess.run(
+                        ["claude", "--bg", "-n", name, PROMPT.format(note=tilde(note))],
+                        cwd=where,
+                        check=True,
+                        capture_output=True,
+                        text=True,
+                    )
                     status = "opened"
                 except (OSError, subprocess.CalledProcessError) as err:
                     why = getattr(err, "stderr", None) or str(err)
                     status = f"failed: {' '.join(why.split())}"
-                    failed = a.open == "tabs"
             if status in ("opened", "would open"):
                 held[note] = name  # a second item with this note gets no second session
         days = carried(note, date.today()) if note and not state[note] else None
