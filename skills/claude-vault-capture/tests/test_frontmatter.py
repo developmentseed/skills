@@ -1,13 +1,11 @@
-"""Unit tests for frontmatter + filename (slug + sid8) + title sanitization."""
+"""Unit tests for frontmatter + slug + title sanitization."""
 
 import yaml
 from curate import (
     sanitize_title,
-    sanitize_summary,
     sanitize_tag,
     sanitize_type,
     make_slug,
-    make_filename,
     render_frontmatter,
 )
 
@@ -86,16 +84,6 @@ class TestMakeSlug:
         assert make_slug("Decision: use PostgreSQL") == make_slug(
             "Decision: use PostgreSQL"
         )
-
-
-class TestMakeFilename:
-    def test_format(self):
-        fname = make_filename("2026-04-23", "my-slug", "abcd1234efgh")
-        assert fname == "2026-04-23-my-slug-abcd1234.md"
-
-    def test_sid8_is_first_8(self):
-        fname = make_filename("2026-04-23", "slug", "0123456789abcdef")
-        assert fname.endswith("-01234567.md")
 
 
 class TestRenderFrontmatter:
@@ -247,48 +235,6 @@ class TestSanitizeTag:
         assert len(sanitize_tag("x" * 100)) == 40
         assert sanitize_tag("!!!") == ""
         assert sanitize_tag(42) == "42"
-
-
-class TestSanitizeSummary:
-    def test_strips_pipe(self):
-        assert "|" not in sanitize_summary("foo|bar")
-
-    def test_strips_closing_wikilink(self):
-        assert "]]" not in sanitize_summary("foo]]bar")
-
-    def test_strips_opening_wikilink(self):
-        assert "[[" not in sanitize_summary("foo[[bar")
-
-    def test_strips_hash(self):
-        assert "#" not in sanitize_summary("foo # bar")
-
-    def test_strips_backtick(self):
-        assert "`" not in sanitize_summary("foo `code` bar")
-
-    def test_strips_control_chars(self):
-        assert "\x00" not in sanitize_summary("foo\x00bar")
-        assert "\n" not in sanitize_summary("foo\nbar")
-        assert "\t" not in sanitize_summary("foo\tbar")
-
-    def test_collapses_internal_whitespace(self):
-        result = sanitize_summary("foo   bar   baz")
-        assert "  " not in result
-
-    def test_strips_leading_trailing_whitespace(self):
-        result = sanitize_summary("  hello world  ")
-        assert result == result.strip()
-
-    def test_truncates_to_140(self):
-        long_summary = "a" * 200
-        assert len(sanitize_summary(long_summary)) <= 140
-
-    def test_normal_summary_unchanged(self):
-        s = "Adds sanitize_summary helper with a 140-character cap for vault-save frontmatter"
-        assert sanitize_summary(s) == s
-
-    def test_deterministic(self):
-        s = "Refactor vault-save to write to claude-docs/ with summary and description"
-        assert sanitize_summary(s) == sanitize_summary(s)
 
 
 class TestDescriptionYaml:

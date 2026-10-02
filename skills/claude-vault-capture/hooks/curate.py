@@ -74,12 +74,7 @@ _BAD_CHARS_RE = re.compile(r"[\|\[\]#`\x00-\x1f\x7f]")
 _MULTI_SPACE_RE = re.compile(r"\s+")
 
 
-def sanitize_title(title: str) -> str:
-    """Strip chars unsafe in Obsidian wikilinks; collapse whitespace; truncate to 120."""
-    return sanitize_summary(title, max_len=120)
-
-
-def sanitize_summary(s: str, max_len: int = 140) -> str:
+def sanitize_title(s: str, max_len: int = 120) -> str:
     """Strip chars unsafe in Obsidian wikilinks; collapse whitespace; truncate."""
     s = _BAD_CHARS_RE.sub(" ", s)
     s = _MULTI_SPACE_RE.sub(" ", s)
@@ -164,12 +159,6 @@ def make_slug(title: str) -> str:
         cut = s[:60]
         s = (cut[: cut.rfind("-")] if cut.rfind("-") > 0 else cut).strip("-")
     return s or "untitled"
-
-
-def make_filename(date_str: str, slug: str, session_id: str) -> str:
-    """Return YYYY-MM-DD-<slug>-<sid8>.md"""
-    sid8 = session_id[:8]
-    return f"{date_str}-{slug}-{sid8}.md"
 
 
 # ── frontmatter rendering ──────────────────────────────────────────────────────
@@ -353,18 +342,25 @@ def build_log_entry(
 # ── concurrent-safe append ────────────────────────────────────────────────────
 
 
+def _locked_append(path: pathlib.Path, text: str, header: str = "") -> None:
+    """Append *text* under an exclusive flock; *header* first if the file is new.
+
+    Closing the file flushes it, then releases the lock.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "a", encoding="utf-8") as fh:
+        fcntl.flock(fh, fcntl.LOCK_EX)
+        if header and fh.tell() == 0:
+            fh.write(header)
+        fh.write(text)
+
+
 def append_log(entry: dict, *, log_path: pathlib.Path | None = None) -> None:
-    """Append one JSON line to log_path under an exclusive flock.
+    """Append one JSON line to log_path.
 
     Defaults resolve at call time (not as a default arg) so tests can patch LOG_PATH.
     """
-    log_path = log_path or LOG_PATH
-    log_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(log_path, "a", encoding="utf-8") as fh:
-        fcntl.flock(fh, fcntl.LOCK_EX)
-        fh.write(json.dumps(entry) + "\n")
-        fh.flush()
-        fcntl.flock(fh, fcntl.LOCK_UN)
+    _locked_append(log_path or LOG_PATH, json.dumps(entry) + "\n")
 
 
 def _log_skip(
@@ -391,16 +387,12 @@ def _append_index(
     index_path: pathlib.Path | None = None,
 ) -> None:
     """Append one line to session-index.tsv, creating the file with header if absent."""
-    index_path = index_path or INDEX_PATH
-    index_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(index_path, "a", encoding="utf-8") as fh:
-        fcntl.flock(fh, fcntl.LOCK_EX)
-        if fh.tell() == 0:
-            # schema_version 2: path_b column dropped with Path B retirement.
-            fh.write("# schema_version: 2\n")
-        fh.write(f"{session_id}\t{path_a or 'null'}\t{date_str}\n")
-        fh.flush()
-        fcntl.flock(fh, fcntl.LOCK_UN)
+    _locked_append(
+        index_path or INDEX_PATH,
+        f"{session_id}\t{path_a or 'null'}\t{date_str}\n",
+        # schema_version 2: path_b column dropped with Path B retirement.
+        header="# schema_version: 2\n",
+    )
 
 
 # ── API call stubs (overridable in tests) ─────────────────────────────────────
@@ -677,41 +669,19 @@ def _estimate_cost_a(tokens_in: int, tokens_out: int) -> float:
 
 
 def _write_artifact(
-    path: pathlib.Path,
-    *,
-    title: str,
-    fm_type: str,
-    project: str,
-    source: str,
-    session_id: str,
-    created: str,
-    model: str,
-    cost_usd: float | None,
-    redactions: dict[str, int],
-    tags: list[str],
-    body: str,
-    source_links: list[str],
+    path: pathlib.Path, *, body: str, source_links: list[str], **fm
 ) -> None:
-    fm = render_frontmatter(
-        title=title,
-        fm_type=fm_type,
-        project=project,
-        tags=tags,
-        source=source,
-        session_id=session_id,
-        created=created,
-        model=model,
-        cost_usd=cost_usd,
-        redactions=redactions,
-    )
-    clean_title = sanitize_title(title)
+    """Write one note; *fm* is render_frontmatter's keyword arguments."""
     source_section = ""
     if source_links:
         source_section = (
             "\n## Source\n" + "\n".join(f"- {link}" for link in source_links) + "\n"
         )
 
-    content = f"{fm}\n# {clean_title}\n{body}\n{source_section}"
+    content = (
+        f"{render_frontmatter(**fm)}\n# {sanitize_title(fm['title'])}\n"
+        f"{body}\n{source_section}"
+    )
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content, encoding="utf-8")
 
@@ -934,7 +904,7 @@ def run_capture(
     if result_a and skip_reason_a is None:
         title_a = sanitize_title(result_a.get("title", "untitled"))
         slug_a = make_slug(title_a)
-        fname_a = make_filename(date_str, slug_a, session_id)
+        fname_a = f"{date_str}-{slug_a}-{session_id[:8]}.md"
         rel_a = f"Inbox/auto/{fname_a}"
         full_path_a = vault_dir / "Inbox" / "auto" / fname_a
         try:
