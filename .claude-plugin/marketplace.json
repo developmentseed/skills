@@ -40,7 +40,7 @@
       "name": "claude-vault-capture",
       "source": "./skills/claude-vault-capture",
       "description": "Turns Claude Code sessions into curated Obsidian notes automatically on session end. Always-on: sends each qualifying transcript to a model and makes a paid call (~$0.11 median per capture, or bill to Claude Pro/Max).",
-      "version": "0.3.2",
+      "version": "0.3.3",
       "license": "MIT"
     }
   ]

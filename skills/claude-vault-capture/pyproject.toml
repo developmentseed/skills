@@ -1,6 +1,6 @@
 [project]
 name = "claude-vault-capture"
-version = "0.3.2"
+version = "0.3.3"
 description = "Automatic Claude Code session capture into an Obsidian vault on SessionEnd."
 readme = "README.md"
 requires-python = ">=3.11"
