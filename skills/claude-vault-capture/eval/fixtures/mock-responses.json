@@ -1,0 +1,68 @@
+{
+  "debugging-only": {
+    "path_a": null
+  },
+  "adr-worthy": {
+    "path_a": {
+      "title": "Decision: PostgreSQL with PgBouncer for session store",
+      "type": "decision",
+      "body": "We chose PostgreSQL for the session store over MongoDB.\n\n**Rationale:** Fixed schema, team SQL familiarity, atomic upsert requirements, 50k sessions/day fits comfortably within Postgres capacity.\n\n**Schema:** sessions(session_id UUID PK, user_id, data jsonb, created_at, expires_at). Partial index on `WHERE expires_at > now()` for hot-path lookups.\n\n**Connection pooling:** PgBouncer in transaction mode (2x instance count pool size). Short upsert/select queries make transaction pooling appropriate.\n\n**Rejected:** MongoDB — no advantage given fixed schema and team familiarity with SQL; adds operational complexity without benefit.",
+      "source_links": [],
+      "tags": ["database", "architecture", "postgresql"],
+      "tokens_in": 400,
+      "tokens_out": 200,
+      "cost_usd": 0.004
+    }
+  },
+  "runbook-worthy": {
+    "path_a": {
+      "title": "Runbook: Rotate AWS RDS Master Password via Secrets Manager",
+      "type": "runbook",
+      "body": "**Pre-rotation checklist**\n1. Confirm AWS Console + CLI access with SecretsManager:RotateSecret permission\n2. Schedule 15-min maintenance window\n3. Notify on-call\n\n**Rotation steps**\n1. `aws secretsmanager rotate-secret --secret-id prod/myapp/db-password --rotation-lambda-arn <ARN>`\n2. Watch CloudWatch Logs for rotation Lambda — confirm setSecret + finishSecret within 60s\n3. Rolling restart: `aws ecs update-service --cluster prod --service myapp --force-new-deployment`\n4. Watch ECS task health — green within 3 min\n5. Verify app connects with new secret\n\n**Rollback**\n- `aws secretsmanager rollback-secret --secret-id prod/myapp/db-password` (within 24h)\n- If Lambda fails: set secret manually via Console, restart tasks\n\n**Post-rotation**\n- Confirm old password no longer works\n- Update last-rotated in security tracker",
+      "source_links": [],
+      "tags": ["aws", "rds", "security", "runbook"],
+      "tokens_in": 500,
+      "tokens_out": 300,
+      "cost_usd": 0.006
+    }
+  },
+  "mixed": {
+    "path_a": {
+      "title": "Decision: Redis for cross-instance API caching",
+      "type": "decision",
+      "body": "Multi-instance ECS deployment (3 tasks) requires shared cache — in-process cache would give inconsistent hits across instances.\n\n**Decision:** Redis with redis-py + connection pool.\n\n**Key scheme:**\n- User prefs: `user:prefs:{user_id}` → TTL 300s\n- Product catalog: `catalog:product:{product_id}` → TTL 3600s\n\n**Config:** `maxmemory-policy allkeys-lru` for graceful eviction.\n\n**Watch for:** Thundering herd on rolling deploys — stagger deployments or add TTL jitter (±10%).",
+      "source_links": [],
+      "tags": ["caching", "redis", "architecture"],
+      "tokens_in": 600,
+      "tokens_out": 180,
+      "cost_usd": 0.0035
+    }
+  },
+  "with-secrets": {
+    "path_a": null
+  },
+  "malformed-title": {
+    "path_a": {
+      "title": "Decision: Terraform|infra [[management]] #choice",
+      "type": "decision",
+      "body": "We decided to use Terraform for infrastructure management. Team HCL familiarity and existing org module registry were the deciding factors. Pulumi and CDK were rejected.",
+      "source_links": [],
+      "tags": ["terraform", "infra", "iac"],
+      "tokens_in": 300,
+      "tokens_out": 100,
+      "cost_usd": 0.002
+    }
+  },
+  "malformed_haiku": {
+    "path_a": {
+      "title": "Decision: Use PostgreSQL",
+      "type": "decision",
+      "body": "Chose PostgreSQL for the project.",
+      "source_links": [],
+      "tags": ["database"],
+      "tokens_in": 200,
+      "tokens_out": 50,
+      "cost_usd": 0.001
+    }
+  }
+}
