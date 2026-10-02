@@ -1,0 +1,5 @@
+{
+  "name": "session-kickoff",
+  "description": "Morning start for several Claude Code sessions: for each open item in today's focus list that links a handoff note, starts a session in that note's project asking what to do next, and lists their answers in one table. Skips notes a session already works from, safe to re-run. The morning half of session-handoffs.",
+  "version": "1.0.0"
+}

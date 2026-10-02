@@ -207,7 +207,9 @@ def unusable(note):
         return "missing"
     lines = [line.strip() for line in text.splitlines()[:200]]
     if lines and lines[0] == "---":  # skip YAML frontmatter
-        end = next((i for i, line in enumerate(lines[1:], 1) if line == "---"), len(lines))
+        end = next(
+            (i for i, line in enumerate(lines[1:], 1) if line == "---"), len(lines)
+        )
         lines = lines[end + 1 :]
     head = [line for line in lines if line][:6]
     return "superseded" if any(BANNER.match(line) for line in head) else None
@@ -223,7 +225,11 @@ def day_of(name):
     """The date in a file name (2026-09-28, 2026_09_28 or 20260928), or None."""
     m = DATED.search(name)
     try:
-        return datetime.strptime(re.sub(r"[-_]", "", m.group()), "%Y%m%d").date() if m else None
+        return (
+            datetime.strptime(re.sub(r"[-_]", "", m.group()), "%Y%m%d").date()
+            if m
+            else None
+        )
     except ValueError:
         return None
 
@@ -235,7 +241,9 @@ def carried(note, day):
     since = day_of(note.name)
     if since is None or (day - since).days > 366:
         return None
-    return sum((since + timedelta(n)).weekday() < 5 for n in range(1, (day - since).days + 1))
+    return sum(
+        (since + timedelta(n)).weekday() < 5 for n in range(1, (day - since).days + 1)
+    )
 
 
 def title(text):
@@ -275,7 +283,9 @@ def project_dir(note, claude_dir, known):
 
 
 def transcript_of(claude_dir, sid):
-    return next((t for t in claude_dir.glob(f"projects/*/{sid}.jsonl") if t.is_file()), None)
+    return next(
+        (t for t in claude_dir.glob(f"projects/*/{sid}.jsonl") if t.is_file()), None
+    )
 
 
 def created(claude_dir, sid):
@@ -307,7 +317,9 @@ def sessions(me, claude_dir):
         )
     live = [s for s in listed if s.get("sessionId") and s.get("state") != "failed"]
     # startedAt moves when a session is resumed or respawned: it only breaks ties
-    live.sort(key=lambda s: (created(claude_dir, s["sessionId"]), s.get("startedAt") or 0))
+    live.sort(
+        key=lambda s: (created(claude_dir, s["sessionId"]), s.get("startedAt") or 0)
+    )
     return {
         s["sessionId"]: (s.get("name") or s["sessionId"][:8], s.get("state") or "-")
         for s in live
@@ -320,17 +332,25 @@ def blocks(entry):
     content = msg.get("content") if isinstance(msg, dict) else None
     if isinstance(content, str):
         return [{"type": "text", "text": content}]
-    return [b for b in content if isinstance(b, dict)] if isinstance(content, list) else []
+    return (
+        [b for b in content if isinstance(b, dict)] if isinstance(content, list) else []
+    )
 
 
 def text_of(entry):
-    return "\n".join(str(b.get("text")) for b in blocks(entry) if b.get("type") == "text")
+    return "\n".join(
+        str(b.get("text")) for b in blocks(entry) if b.get("type") == "text"
+    )
 
 
 def prompt(entry):
     """The text of a request the user typed in a transcript entry, else None: tool output, skill
     text, or a local command (/model, a ! shell line) and its output."""
-    if entry.get("type") != "user" or entry.get("isMeta") or entry.get("isCompactSummary"):
+    if (
+        entry.get("type") != "user"
+        or entry.get("isMeta")
+        or entry.get("isCompactSummary")
+    ):
         return None
     text = text_of(entry)
     return text if text and not text.lstrip().startswith(NOT_ASKED) else None
@@ -417,7 +437,11 @@ def latest_reply(transcript):
         msg = entry.get("message")
         if prompt(entry) is not None:
             turn = []
-        elif isinstance(msg, dict) and msg.get("stop_reason") == "end_turn" and text_of(entry):
+        elif (
+            isinstance(msg, dict)
+            and msg.get("stop_reason") == "end_turn"
+            and text_of(entry)
+        ):
             turn.append(text_of(entry))
             latest = "\n".join(turn).strip() or latest
     return latest
@@ -429,7 +453,9 @@ def answer(reply):
     if not reply:
         return "(no reply yet)"
     hits = [h.strip("*_ ") for h in NEXT.findall(reply)]
-    hits = [h for h in hits if "Needs me" in h] or [h for h in hits if h]  # not a bare "**"
+    hits = [h for h in hits if "Needs me" in h] or [
+        h for h in hits if h
+    ]  # not a bare "**"
     text = hits[-1] if hits else reply.splitlines()[0][:120]
     return " ".join(text.split())
 
@@ -488,7 +514,9 @@ def main(argv=None):
     p.add_argument(
         "--heading", default="Today's Focus", help="text in the focus list's heading"
     )
-    p.add_argument("--only", type=int, nargs="+", metavar="N", help="open only these items")
+    p.add_argument(
+        "--only", type=int, nargs="+", metavar="N", help="open only these items"
+    )
     p.add_argument(
         "--open",
         choices=("agents", "tabs", "windows"),
@@ -512,18 +540,25 @@ def main(argv=None):
     vault = vault_of(daily)
     todo = [
         (i, text, note_of(text, vault))
-        for i, (done, text) in enumerate(items(section(daily.read_text(), a.heading)), 1)
+        for i, (done, text) in enumerate(
+            items(section(daily.read_text(), a.heading)), 1
+        )
         if not done and (not a.only or i in a.only)
     ]
     state = {n: unusable(n) for _, _, n in todo if n}
     me = os.environ.get("CLAUDE_CODE_SESSION_ID")
     live = sessions(me, a.claude_dir)
     if a.digest:
-        rows = [("item", "state", "name", "answer"), *digest(todo, state, live, a.claude_dir, me)]
+        rows = [
+            ("item", "state", "name", "answer"),
+            *digest(todo, state, live, a.claude_dir, me),
+        ]
         print("\n".join("\t".join(r) for r in rows))
         return
     usable = {n for n, s in state.items() if not s}
-    held = {n: live[sid][0] for n, sid in claims(live, usable, a.claude_dir, me).items()}
+    held = {
+        n: live[sid][0] for n, sid in claims(live, usable, a.claude_dir, me).items()
+    }
     config = (
         a.claude_dir / ".claude.json"
         if os.environ.get("CLAUDE_CONFIG_DIR")

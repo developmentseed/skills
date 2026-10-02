@@ -42,6 +42,13 @@
       "description": "End-of-day wrap-up for several Claude Code sessions: reads every session's transcript to see which ones left a current handoff note and lists the notes under \"For Tomorrow\" in your daily note; on request asks one session or writes a note from its transcript. Never waits, safe to re-run. Use for /session-handoffs or when asked to wrap up all sessions.",
       "version": "1.1.0",
       "license": "MIT"
+    },
+    {
+      "name": "session-kickoff",
+      "source": "./skills/session-kickoff",
+      "description": "Morning start for several Claude Code sessions: for each open item in today's focus list that links a handoff note, starts a session in that note's project asking what to do next, and lists their answers in one table. Skips notes a session already works from, safe to re-run. The morning half of session-handoffs. Use for /session-kickoff or when asked to start the day's sessions.",
+      "version": "1.0.0",
+      "license": "MIT"
     }
   ]
 }

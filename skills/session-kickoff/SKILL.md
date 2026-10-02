@@ -13,7 +13,7 @@ The sessions answer and wait for you. That last line lets `--digest` (step 4) li
 
 ## When to use this
 
-In the morning, in a fresh session started where a note with no project should open (e.g. `~/DevDS`). The evening before, /session-handoffs writes the list.
+In the morning, in a fresh session started where a note with no project should open (e.g. `~/code`). The evening before, /session-handoffs writes the list.
 
 ## Requirements
 
@@ -21,7 +21,9 @@ In the morning, in a fresh session started where a note with no project should o
 - For `--open tabs` or `--open windows`: macOS and Terminal.app. The first run asks to let the app running Claude Code control Terminal (Automation). Tabs also need that app to have Accessibility permission (System Settings → Privacy & Security → Accessibility), because Terminal can only open a tab through a ⌘T keystroke: grant it to the app Claude Code runs in (Terminal, iTerm2, VS Code, Ghostty…), not necessarily Terminal.
 - A daily note with a focus list. The skill reads a `session-kickoff daily note:` line in your `~/.claude/CLAUDE.md` or memory, for example:
   `session-kickoff daily note: ~/notes/daily/{date}.md, heading "## Today's Focus"`
-  The heading matches whatever else the line holds, such as an emoji (`## 🎯 Today's Focus`). Without one, it uses the file on your `session-handoffs daily note:` line and the heading "Today's Focus". Add `, open in tabs` (or `windows`) to the line to change where sessions go by default.
+  The heading matches whatever else the line holds, such as an emoji (`## 🎯 Today's Focus`). Without one, it uses the file on your `session-handoffs daily note:` line and the heading "Today's Focus"; with neither, it asks for the note. Add `, open in tabs` (or `windows`) to the line to change where sessions go by default.
+- Items that link their handoff note by path or `[[wikilink]]`, as /session-handoffs writes them, for example:
+  `- [ ] **Release 0.12** — ~/.claude/projects/-Users-me-code-app/handoff_2026-10-01_release.md`
 
 ## Arguments
 
