@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """Report which Claude Code sessions on this machine left a handoff note, and which didn't.
 
-Read-only and safe to re-run. Running sessions come from the registry (<config>/sessions/*.json);
-each session's transcript (<config>/projects/*/<sessionId>.jsonl, plus its subagents' under
-projects/*/<sessionId>/subagents/) records every Write, Edit and NotebookEdit with its file path
-and time. Neither is a documented interface: if they can't be read, it exits with an error rather
+Read-only and safe to re-run. Running sessions come from `claude agents --json` when it lists the
+session running this (inside Claude Code's Bash sandbox it lists only some, or none), else from
+the registry (<config>/sessions/*.json); each session's transcript
+(<config>/projects/*/<sessionId>.jsonl, plus its subagents' under projects/*/<sessionId>/subagents/)
+records every Write, Edit and NotebookEdit with its file path and time. Neither the registry nor
+the transcript is a documented interface: if they can't be read, it exits with an error rather
 than print an empty report (a registry that moved isn't noticed: every session then reads as
 closed). Run from a terminal, it can't tell that from a window in which no session used a tool,
 and exits with an error for both. <config> is $CLAUDE_CONFIG_DIR, else ~/.claude. The session
@@ -52,6 +54,7 @@ import argparse
 import json
 import os
 import re
+import subprocess
 from collections import Counter
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -61,8 +64,9 @@ TEMP_ROOTS = ("/tmp/", "/private/tmp/", "/var/folders/", "/private/var/folders/"
 STALE_AFTER = 30  # work after the latest note that makes it out of date
 SNAPSHOT_STALE_AFTER = 5  # a snapshot can't know what came after it
 MIN_WORK = 30  # below this, a session without a note is not worth reporting
-# registry kinds of a running working session: interactive, and `claude --bg` sessions
-LIVE_KINDS = ("interactive", "bg")
+# kinds of a running working session: interactive, and `claude --bg` sessions, which the registry
+# calls "bg" and `claude agents --json` "background"
+LIVE_KINDS = ("interactive", "bg", "background")
 # a note may be named for a day up to this far ahead (written on Friday for Monday)
 AHEAD_DAYS = 3
 FILE_TOOLS = ("Write", "Edit", "NotebookEdit")
@@ -326,6 +330,27 @@ def scan(transcript, subagents, day):
     return {n: ts for n, (ts, _) in last.items()}, runs, work, entrypoint, calls
 
 
+def agents(me):
+    """Running sessions from `claude agents --json`, the documented list, or None to read the
+    registry. Inside Claude Code's Bash sandbox it lists only some sessions, or none, so it counts
+    only if it lists `me`, the session running this, which is running."""
+    try:
+        sessions = json.loads(
+            subprocess.run(
+                ["claude", "agents", "--json"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+                # no call to api.anthropic.com, which the sandbox blocks with a warning
+                env={**os.environ, "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1"},
+            ).stdout
+        )
+        listed = me and any(s.get("sessionId") == me for s in sessions)
+    except (OSError, subprocess.SubprocessError, ValueError, AttributeError, TypeError):
+        return None
+    return sessions if listed else None
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     p.add_argument(
@@ -361,15 +386,18 @@ def main(argv=None):
             "set CLAUDE_CONFIG_DIR if Claude Code keeps its data elsewhere"
         )
 
-    # not `claude agents --json`, documented but empty inside Claude Code's Bash sandbox
-    live, registered = {}, False  # running interactive sessions: session id -> name
     registry = list((a.claude_dir / "sessions").glob("*.json"))
-    for f in registry:
-        try:
-            s = json.loads(f.read_text())
-            sid = s.get("sessionId")
-        except (OSError, ValueError, AttributeError):
-            continue
+    entries = agents(me)
+    if entries is None:
+        entries = []
+        for f in registry:
+            try:
+                entries.append(json.loads(f.read_text()))
+            except (OSError, ValueError):
+                continue
+    live, registered = {}, False  # running working sessions: session id -> name
+    for s in entries:
+        sid = s.get("sessionId") if isinstance(s, dict) else None
         registered = registered or bool(sid)
         if sid and sid != me and s.get("kind", "interactive") in LIVE_KINDS:
             live[sid] = s.get("name") or sid[:8]

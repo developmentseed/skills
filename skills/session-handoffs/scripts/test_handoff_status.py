@@ -4,6 +4,7 @@ import contextlib
 import io
 import json
 import os
+import subprocess
 import tempfile
 import time
 import unittest
@@ -70,6 +71,16 @@ class HandoffStatusTest(unittest.TestCase):
             patcher.start()
             self.addCleanup(patcher.stop)
         time.tzset()
+        # `claude agents --json`: not installed, so the registry is read, unless a test sets it
+        patcher = mock.patch.object(
+            handoff_status.subprocess, "run", side_effect=FileNotFoundError
+        )
+        self.cli = patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def agents(self, *entries):
+        self.cli.side_effect = None
+        self.cli.return_value = subprocess.CompletedProcess([], 0, json.dumps(entries))
 
     def note(self, rel, body="# note"):
         path = self.dir / "notes" / rel
@@ -181,6 +192,26 @@ class HandoffStatusTest(unittest.TestCase):
             self.verdicts(),
             [("bg-busy", "none"), ("bg-note", "fresh"), ("cccccccc", "closed-none")],
         )
+
+    def test_claude_agents_is_used_when_it_lists_this_session(self):
+        self.session(1, "in-registry", sid("b"))
+        for s in "ab":
+            self.transcript(sid(s), *work(30))
+        me = {"sessionId": sid("d"), "name": "me", "kind": "interactive"}
+        bg = {"sessionId": sid("a"), "name": "bg-busy", "kind": "background"}
+        self.agents(me, bg)
+        self.assertEqual(
+            self.verdicts(), [("bbbbbbbb", "closed-none"), ("bg-busy", "none")]
+        )
+        # inside Claude Code's Bash sandbox it lists only some sessions: the registry then
+        registry = [("aaaaaaaa", "closed-none"), ("in-registry", "none")]
+        self.agents(bg)
+        self.assertEqual(self.verdicts(), registry)
+        for broken in ("", "{}", "[1]", "null"):
+            self.cli.return_value.stdout = broken
+            self.assertEqual(self.verdicts(), registry, broken)
+        self.cli.side_effect = subprocess.TimeoutExpired("claude", 10)
+        self.assertEqual(self.verdicts(), registry)
 
     def test_staleness_counts_main_calls_and_subagent_edits(self):
         note = self.note(f"handoff_{DAY}.md")
