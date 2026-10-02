@@ -131,3 +131,30 @@ Once every subagent has replied, re-run steps 1 and 2 here: each snapshot now co
 - A snapshot's freshness counts from when it was written, not from where its log ends: calls a busy session makes while the snapshot is being written count as covered.
 - The check reads `$CLAUDE_CONFIG_DIR` if set, else `~/.claude`.
 - An asked session's writes may trigger a permission prompt in its own terminal.
+
+## Optional: hooks
+
+`scripts/handoff_guard.py` can run as a hook. It only reads (this session's transcript, the notes, memory files), prints nothing unless it has something to say, and never blocks a prompt. It does nothing until you set one of these in the `env` of `~/.claude/settings.json`:
+
+- `SESSION_HANDOFFS_GUARD=1`: one current note per piece of work. Claude is told, as context:
+  - on a prompt asking for a handoff, after the session's first (any spelling; not a path, a file name or a /command): this session's current notes (the ones it wrote, read or was given, and snapshots of it) and the memory lines naming them;
+  - after a Write that creates a note: the others still current;
+  - at the end of that turn: a note the new one names on a line starting "Supersedes" or "Replaces" that still has no banner. Claude gets one more turn to add it ("Stop hook feedback"), at most once per turn. This session's snapshots it didn't edit are left to step 2.
+- `SESSION_HANDOFFS_NUDGE=1`: for sessions that don't write notes on their own. The first time a session has made 30 tool calls over 2 hours with no note, you see one line (a turn later if you interrupt that turn; none if it ends in plan mode or while another Stop hook keeps Claude going) suggesting you ask it for one, or snapshot it later. It goes to you, not Claude, so it costs no tokens.
+
+Both skip subagents, `claude -p`, SDK runs not registered as interactive sessions, and plan and dontAsk modes. Each run takes about 20 ms (Python start-up; only the last turn of the transcript is read), or about 30 ms when it lists notes (measured on a 21 MB transcript). A listing adds 300 to 500 tokens of context, up to about 750 with many notes and memory lines. The Stop feedback costs a model turn. Only Write calls are seen: a note written through the shell is caught only by the prompt check. Snapshots are looked for in every project folder, and in the folder on a `session-handoffs notes:` line in `~/.claude/CLAUDE.md` (the hook doesn't read memory).
+
+With the plugin, `hooks/hooks.json` wires them up; on Windows its commands need Git Bash. Without it, copy both scripts from this skill's folder to a folder of their own, so edits to a checkout never reach running sessions, and re-copy them after each update:
+
+```bash
+mkdir -p ~/.claude/hooks/session-handoffs
+cp scripts/handoff_guard.py scripts/handoff_status.py ~/.claude/hooks/session-handoffs/
+```
+
+Then add this handler under `"hooks"` in `~/.claude/settings.json`, for `UserPromptSubmit`, for `PostToolUse` with `"matcher": "Write"`, and for `Stop`. The variables are set in the command, so you don't need `env`. Drop `SESSION_HANDOFFS_NUDGE=1` if you don't want the nudge. If the script is missing, you see a warning instead of the hooks going quiet:
+
+```json
+{"type": "command", "timeout": 10, "command": "G=\"$HOME/.claude/hooks/session-handoffs/handoff_guard.py\"; [ -f \"$G\" ] || { echo '{\"systemMessage\": \"session-handoffs: hook script missing: ~/.claude/hooks/session-handoffs/handoff_guard.py\"}'; exit 0; }; SESSION_HANDOFFS_GUARD=1 SESSION_HANDOFFS_NUDGE=1 python3 -B \"$G\" || true"}
+```
+
+If you later install the plugin with the variables in `env`, remove these entries, or both copies run.
