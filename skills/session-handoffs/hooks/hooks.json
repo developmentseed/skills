@@ -1,0 +1,39 @@
+{
+  "description": "session-handoffs: opt-in, read-only reminders about this session's handoff notes. Off unless SESSION_HANDOFFS_GUARD=1 or SESSION_HANDOFFS_NUDGE=1 is set; see SKILL.md, Optional: hooks.",
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "timeout": 10,
+            "command": "[ \"$SESSION_HANDOFFS_GUARD\" = 1 ] || exit 0; python3 -B \"${CLAUDE_PLUGIN_ROOT}/scripts/handoff_guard.py\" || true"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Write",
+        "hooks": [
+          {
+            "type": "command",
+            "timeout": 10,
+            "command": "[ \"$SESSION_HANDOFFS_GUARD\" = 1 ] || exit 0; python3 -B \"${CLAUDE_PLUGIN_ROOT}/scripts/handoff_guard.py\" || true"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "timeout": 10,
+            "command": "[ \"$SESSION_HANDOFFS_GUARD\" = 1 ] || [ \"$SESSION_HANDOFFS_NUDGE\" = 1 ] || exit 0; python3 -B \"${CLAUDE_PLUGIN_ROOT}/scripts/handoff_guard.py\" || true"
+          }
+        ]
+      }
+    ]
+  }
+}
