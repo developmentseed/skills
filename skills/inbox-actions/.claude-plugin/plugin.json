@@ -1,0 +1,5 @@
+{
+  "name": "inbox-actions",
+  "description": "Turns recent Gmail (claude.ai Gmail connector) into a short to-do list (replies owed, decisions, GitHub review requests and @-mentions, deadlines) plus what you're waiting on, optionally added to your daily note. Read-only on the mailbox. Claude Code only.",
+  "version": "1.0.0"
+}

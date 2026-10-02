@@ -5,6 +5,7 @@ A [Claude Code plugin marketplace](https://docs.anthropic.com/en/docs/claude-cod
 ## What's here
 
 - **[github-issue-to-markdown](skills/github-issue-to-markdown/)**: exports GitHub issues (including from private repos) to structured Markdown using the `gh` CLI
+- **[inbox-actions](skills/inbox-actions/)**: turns recent Gmail into a short to-do list (replies owed, decisions, GitHub review requests and @-mentions, deadlines) plus what you're waiting on, optionally added to your daily note. Read-only on the mailbox; needs the claude.ai Gmail connector. Claude Code only
 - **[setup-python-repo](skills/setup-python-repo/)**: scaffolds CI/CD, linting, release automation, and dependency automation for uv-based Python repositories using GitHub Actions
 - **[veda-story-creator](skills/veda-story-creator/)**: generates [VEDA](https://www.earthdata.nasa.gov/dashboard) scrollytelling MDX stories with satellite data visualizations. Includes a dataset catalog, annotated examples, and lessons learned
 
