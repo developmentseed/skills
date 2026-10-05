@@ -22,7 +22,7 @@ What it reads and writes: the subjects and snippets of every thread in the windo
 ## Usage
 
 ```
-/inbox-actions            # mail since the last digest (or the previous working day)
+/inbox-actions            # mail since the last digest (or the previous working day); sent mail from the last 7 days
 /inbox-actions 3d         # last 3 days (any Nd)
 /inbox-actions 2026-01-05 # since that date
 /inbox-actions chat       # chat only, don't touch the daily note
@@ -62,12 +62,12 @@ If Claude Code's sandbox keeps `gh` from its login, Claude Code offers to retry 
 
 Without `gh`, or if it fails: Review = the search-1 threads whose in-window reasons include `review_requested`, except those whose last snippet starts `Merged #` or `Closed #`, each marked "(not checked)" and linked `[email](<viewUrl>)`. Skip search 3 below and add `_Not checked: @-mentions (no gh)_` under the `_Updated` line.
 
-**Gmail.** Three searches, each with `after:<epoch>`:
+**Gmail.** Three searches. The sent one looks further back, so an ask nobody has answered stays in Waiting on others for a week: `<sent-epoch>` is the earlier of `<epoch>` and 7 days ago (`$(( $(date +%s) - 604800 ))`).
 
 | Query | View | For |
 |---|---|---|
 | `in:inbox after:<epoch>` | `THREAD_VIEW_MINIMAL`, `pageSize: 50`, follow `nextPageToken` | everything received |
-| `in:sent after:<epoch>` | `THREAD_VIEW_MINIMAL`, `pageSize: 50` | threads you wrote in (Waiting on others) |
+| `in:sent after:<sent-epoch>` | `THREAD_VIEW_MINIMAL`, `pageSize: 50`, follow `nextPageToken` | threads you wrote in (Waiting on others) |
 | `in:inbox after:<epoch> from:notifications@github.com "@<login>"` | `THREAD_VIEW_METADATA_ONLY` | thread ids that really @-mention you |
 
 MINIMAL is about 2.6k characters a thread, so more than ~30 threads overflows into a saved file. Compact every saved page from the first two searches in one run (it deduplicates threads across pages):
@@ -100,6 +100,8 @@ The account is the one the script prints. If the previous digest names a differe
 - last message from someone else asking you for a reply, answer, document, or decision → **Reply/decide** (**Do**, marked "today" and listed first, if it's due today or tomorrow or someone is blocked)
 - last message from you (`ME`) asking someone for something → **Waiting on others**; if instead it promises something from you ("I'll send it tomorrow") → **Do**
 - informational → **FYI**, one line
+
+Rows whose last column is `-` have no message since `<epoch>`; they come only from the wider sent search. Keep one as **Waiting on others** only if it is `ME` and asks someone for something; skip the rest, since an earlier digest covered them. If the snippet doesn't show the ask, read it with `get_thread`.
 
 **Services.** Security alerts → **FYI** "check it was you". Invoices, bookings, expiring access, admin requests → **Do** with the due date if stated. Marketing and newsletters → skip (count only).
 

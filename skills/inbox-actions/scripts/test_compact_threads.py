@@ -51,6 +51,12 @@ class CompactThreadsTest(unittest.TestCase):
              "messages": [msg(1, "10-01", labels=["SENT"], sender="alias@example.net")]}
         self.assertEqual(self.run_on(t)[1][0]["flags"], "ME")
 
+    def test_sent_before_window_has_no_in_window_ids(self):
+        t = {"id": "t3", "viewUrl": URL + "t3",
+             "messages": [msg(1, "09-28", labels=["SENT"], sender="you@example.org")]}
+        row = self.run_on(t)[1][0]
+        self.assertEqual((row["flags"], row["in_window_ids"]), ("ME", "-"))
+
 
 if __name__ == "__main__":
     unittest.main()
