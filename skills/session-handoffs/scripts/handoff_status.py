@@ -1,18 +1,18 @@
 #!/usr/bin/env python3
 """Report which Claude Code sessions on this machine left a handoff note, and which didn't.
 
-Read-only and safe to re-run. Running sessions come from `claude agents --json` when it lists the
-session running this (inside Claude Code's Bash sandbox it lists only some, or none), else from
-the registry (<config>/sessions/*.json); each session's transcript
+Read-only and safe to re-run. A session is running if the registry (<config>/sessions/*.json) or
+`claude agents --json` lists it (inside Claude Code's Bash sandbox the CLI lists only some, or none,
+so it never replaces the registry); each session's transcript
 (<config>/projects/*/<sessionId>.jsonl, plus its subagents' under projects/*/<sessionId>/subagents/)
-records every Write, Edit and NotebookEdit with its file path and time. Neither the registry nor
-the transcript is a documented interface: if they can't be read, it exits with an error rather
-than print an empty report (a registry that moved isn't noticed: every session then reads as
-closed). Run from a terminal, it can't tell that from a window in which no session used a tool,
-and exits with an error for both. <config> is $CLAUDE_CONFIG_DIR, else ~/.claude. The session
+records every Write, Edit and NotebookEdit with its file path and time. Neither the registry nor the
+transcript is a documented interface: if they can't be read, it exits with an error rather than
+print an empty report (a registry that moved isn't noticed: every session the CLI doesn't list then
+reads as closed). Run from a terminal, it can't tell that from a window in which no session used a
+tool, and exits with an error for both. <config> is $CLAUDE_CONFIG_DIR, else ~/.claude. The session
 running this ($CLAUDE_CODE_SESSION_ID) is left out, and so is automation (claude -p, the SDK) that
-is no longer running. A session opened to run this report (its first tool call runs this script
-or loads the skill) is never reported as lacking a note.
+is no longer running. A session opened to run this report (its first tool call runs this script or
+loads the skill) is never reported as lacking a note.
 
 The window runs from the start of --date to now. --date defaults to 5 hours ago, so a run
 shortly after midnight still covers the evening.
@@ -330,10 +330,10 @@ def scan(transcript, subagents, day):
     return {n: ts for n, (ts, _) in last.items()}, runs, work, entrypoint, calls
 
 
-def agents(me):
-    """Running sessions from `claude agents --json`, the documented list, or None to read the
-    registry. Inside Claude Code's Bash sandbox it lists only some sessions, or none, so it counts
-    only if it lists `me`, the session running this, which is running."""
+def agents():
+    """Running sessions from `claude agents --json`, the documented list, or [] if it can't be
+    read. Inside Claude Code's Bash sandbox it lists only some sessions, or none, even with the
+    session running this among them, so it adds to the registry and never replaces it."""
     try:
         sessions = json.loads(
             subprocess.run(
@@ -345,10 +345,9 @@ def agents(me):
                 env={**os.environ, "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1"},
             ).stdout
         )
-        listed = me and any(s.get("sessionId") == me for s in sessions)
-    except (OSError, subprocess.SubprocessError, ValueError, AttributeError, TypeError):
-        return None
-    return sessions if listed else None
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return []
+    return sessions if isinstance(sessions, list) else []
 
 
 def main(argv=None):
@@ -387,18 +386,17 @@ def main(argv=None):
         )
 
     registry = list((a.claude_dir / "sessions").glob("*.json"))
-    entries = agents(me)
-    if entries is None:
-        entries = []
-        for f in registry:
-            try:
-                entries.append(json.loads(f.read_text()))
-            except (OSError, ValueError):
-                continue
-    live, registered = {}, False  # running working sessions: session id -> name
-    for s in entries:
+    entries = []
+    for f in registry:
+        try:
+            entries.append(json.loads(f.read_text()))
+        except (OSError, ValueError):
+            continue
+    # from the registry alone: a CLI list mustn't hide a registry that changed
+    registered = any(isinstance(s, dict) and s.get("sessionId") for s in entries)
+    live = {}  # running working sessions, in either list: session id -> name
+    for s in agents() + entries:
         sid = s.get("sessionId") if isinstance(s, dict) else None
-        registered = registered or bool(sid)
         if sid and sid != me and s.get("kind", "interactive") in LIVE_KINDS:
             live[sid] = s.get("name") or sid[:8]
 

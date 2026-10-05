@@ -193,25 +193,28 @@ class HandoffStatusTest(unittest.TestCase):
             [("bg-busy", "none"), ("bg-note", "fresh"), ("cccccccc", "closed-none")],
         )
 
-    def test_claude_agents_is_used_when_it_lists_this_session(self):
+    def test_a_session_either_list_has_is_running(self):
         self.session(1, "in-registry", sid("b"))
         for s in "ab":
             self.transcript(sid(s), *work(30))
         me = {"sessionId": sid("d"), "name": "me", "kind": "interactive"}
         bg = {"sessionId": sid("a"), "name": "bg-busy", "kind": "background"}
-        self.agents(me, bg)
-        self.assertEqual(
-            self.verdicts(), [("bbbbbbbb", "closed-none"), ("bg-busy", "none")]
-        )
-        # inside Claude Code's Bash sandbox it lists only some sessions: the registry then
+        both = [("bg-busy", "none"), ("in-registry", "none")]
+        # inside Claude Code's Bash sandbox the CLI lists only some sessions, maybe this one
+        for partial in ((me, bg), (bg,)):
+            self.agents(*partial)
+            self.assertEqual(self.verdicts(), both)
         registry = [("aaaaaaaa", "closed-none"), ("in-registry", "none")]
-        self.agents(bg)
-        self.assertEqual(self.verdicts(), registry)
         for broken in ("", "{}", "[1]", "null"):
             self.cli.return_value.stdout = broken
             self.assertEqual(self.verdicts(), registry, broken)
         self.cli.side_effect = subprocess.TimeoutExpired("claude", 10)
         self.assertEqual(self.verdicts(), registry)
+        # a registry that changed still stops the report, whatever the CLI lists
+        self.agents(me, bg)
+        (self.dir / "sessions" / "1.json").write_text(json.dumps({"id": sid("b")}))
+        with self.assertRaisesRegex(SystemExit, "no sessionId in"):
+            self.run_cli()
 
     def test_staleness_counts_main_calls_and_subagent_edits(self):
         note = self.note(f"handoff_{DAY}.md")
