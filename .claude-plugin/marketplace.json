@@ -35,6 +35,13 @@
       "description": "Scaffold CI/CD, linting, and dependency automation for a Python project using GitHub Actions",
       "version": "1.0.1",
       "license": "MIT"
+    },
+    {
+      "name": "session-handoffs",
+      "source": "./skills/session-handoffs",
+      "description": "End-of-day wrap-up for several Claude Code sessions: reads every session's transcript to see which ones left a current handoff note and lists the notes under \"For Tomorrow\" in your daily note; on request asks one session or writes a note from its transcript. Never waits, safe to re-run. Use for /session-handoffs or when asked to wrap up all sessions.",
+      "version": "1.1.0",
+      "license": "MIT"
     }
   ]
 }
