@@ -189,6 +189,12 @@ class Links(unittest.TestCase):
         )
         self.assertIsNone(self.note("a ~/My Vault/handoff_x.md"))
 
+    def test_a_code_span_with_two_paths_keeps_them_apart(self):
+        self.assertEqual(
+            self.note("**a** `~/old/handoff.md → ~/new/handoff_2.md`"), HOME / "old/handoff.md"
+        )
+        self.assertEqual(self.note("`~/a/plan.md ~/b/handoff.md`"), HOME / "b/handoff.md")
+
     def test_first_handoff_link_wins_and_others_are_ignored(self):
         text = (
             "see `~/p/plan.md` https://x.org/a/handoff.md https://x/v?path=/d/handoff.md "

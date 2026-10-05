@@ -58,11 +58,12 @@ HEADING = re.compile(r"(#{1,6})\s")
 FENCE = ("```", "~~~")
 ITEM = re.compile(r"(?:[-*+]|\d+\.)\s+(?:\[(.)\]\s+)?(.*)")
 DONE = "xX-"
-# a path in backticks, spaces and all, as /session-handoffs writes it ("`~/My Vault/h.md`"); else
+# a path in backticks, spaces and all, as /session-handoffs writes it ("`~/My Vault/h.md`"), unless the
+# span holds a second path (" ~/" or " /"); else
 # one not part of a URL or a query: "~/x/handoff.md", "(~/…/h.md)", and at the end of a
 # sentence "…/h.md."; not "…/h.md.bak"
 PATH = re.compile(
-    r"`(~?/[^`\n]+?\.md)`|(?<![\w:/.~=-])(~?/[^\s`'\"<>()\[\]|]+?\.md)(?![\w-]|\.\w)"
+    r"`(~?/(?:(?! ~?/)[^`\n])+?\.md)`|(?<![\w:/.~=-])(~?/[^\s`'\"<>()\[\]|]+?\.md)(?![\w-]|\.\w)"
 )
 WIKILINK = re.compile(r"\[\[([^\]|#]+)[^\]]*\]\]")
 BOLD = re.compile(r"\*\*(.+?)\*\*")
