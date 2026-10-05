@@ -14,6 +14,7 @@ import html
 import json
 import re
 from datetime import datetime
+from pathlib import Path
 
 REASON = re.compile(r"([a-z_]+)@noreply\.github\.com")
 REPO = re.compile(r"^(?:Re: )?\[([^\]]+)\]")
@@ -30,7 +31,7 @@ def clean(s, n):
 
 
 def line(t, since):
-    msgs = t.get("messages") or []
+    msgs = [m for m in t.get("messages") or [] if m.get("date")]
     if not msgs:
         return None
     first, last = msgs[0], msgs[-1]
@@ -38,7 +39,7 @@ def line(t, since):
     recent = [m for m in msgs if at(m).timestamp() >= since]
     reasons = sorted({r for m in recent for r in REASON.findall(" ".join(m.get("ccRecipients") or []))})
     subject = clean(first.get("subject") or last.get("subject"), 100)
-    repo = REPO.match(subject) if sender == GITHUB else None
+    repo = REPO.match(subject) if GITHUB in sender else None
     labels = {x for m in msgs for x in m.get("labelIds") or []}
     when = at(last)
     flags = [f for f, on in (("ME", "SENT" in (last.get("labelIds") or [])), ("UNREAD", "UNREAD" in labels)) if on]
@@ -61,7 +62,7 @@ def main(argv=None):
     p.add_argument("--since", type=int, default=0)
     p.add_argument("files", nargs="+")
     a = p.parse_args(argv)
-    threads = {t.get("id"): t for f in a.files for t in json.load(open(f)).get("threads") or []}.values()
+    threads = {t.get("id"): t for f in a.files for t in json.loads(Path(f).read_text()).get("threads") or []}.values()
     account = next((m.group(1) for t in threads if (m := ACCOUNT.search(t.get("viewUrl", "")))), "unknown")
     rows = [r for t in threads if (r := line(t, a.since))]
     print(f"# account: {account}")

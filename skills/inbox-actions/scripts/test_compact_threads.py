@@ -57,6 +57,14 @@ class CompactThreadsTest(unittest.TestCase):
         row = self.run_on(t)[1][0]
         self.assertEqual((row["flags"], row["in_window_ids"]), ("ME", "-"))
 
+    def test_display_name_sender_and_undated_message(self):
+        undated = msg(1, "10-01")
+        del undated["date"]
+        t = {"id": "t4", "viewUrl": URL + "t4",
+             "messages": [undated, msg(2, "10-01", sender="GitHub <notifications@github.com>")]}
+        row = self.run_on(t)[1][0]
+        self.assertEqual((row["repo"], row["in_window_ids"]), ("example-org/example-repo", "m2"))
+
 
 if __name__ == "__main__":
     unittest.main()
