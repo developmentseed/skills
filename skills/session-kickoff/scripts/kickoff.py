@@ -7,7 +7,8 @@ The focus list runs from the heading to the next heading of its level or higher,
 An item is a top-level "- " or "1. " line in it; one checked "[x]" or cancelled "[-]" is
 skipped. Its note is its first link to a handoff note: a .md file whose name contains "handoff",
 or a dated one in a handoff/ or handoffs/ directory, outside memory/. A link is a path (~/… or
-/…, in backticks or not) or an Obsidian [[wikilink]], looked up in the daily note's vault.
+/…, in backticks or not; with spaces only in backticks) or an Obsidian [[wikilink]], looked up
+in the daily note's vault.
 
 The session starts in the project the note belongs to: ~/.claude/projects/<dir>/… maps back to
 the real path listed in ~/.claude.json. A /session-handoffs snapshot (…_snapshot-<sid8>.md) sits
@@ -20,9 +21,9 @@ prompt names the note, or that wrote or edited it (itself or through a subagent)
 doesn't count, nor do later messages: a /session-handoffs run reads every note, and tool output,
 workflow results and other sessions' messages name notes the session isn't working on. Sessions
 come from `claude agents --json --all`: running ones and background ones that finished, but not
-failed ones. This one counts only through its first prompt, so a re-run from a session kickoff
-started leaves that session's note alone. Of several sessions on one note, the newest (by its
-transcript's first timestamp) is named. Inside Claude Code's sandbox, which lists running
+failed or stopped ones. This one counts only through its first prompt, so a re-run from a
+session kickoff started leaves that session's note alone. Of several sessions on one note, the
+newest (by its transcript's first timestamp) is named. Inside Claude Code's sandbox, which lists running
 sessions as failed, it stops with an error. Their transcripts and ~/.claude.json are not a
 documented interface.
 
@@ -50,16 +51,19 @@ from pathlib import Path
 
 # --digest picks the reply's "Next:" line
 PROMPT = (
-    "Can you open {note} and tell me what I should do next? End with one plain line, no "
+    "Can you open `{note}` and tell me what I should do next? End with one plain line, no "
     "formatting: Next: <one step> · Needs me: yes/no · Time: <estimate>"
 )
 HEADING = re.compile(r"(#{1,6})\s")
 FENCE = ("```", "~~~")
 ITEM = re.compile(r"(?:[-*+]|\d+\.)\s+(?:\[(.)\]\s+)?(.*)")
 DONE = "xX-"
-# a path, not part of a URL or a query: "~/x/handoff.md", "`/Users/…/h.md`", "(~/…/h.md)", and
-# at the end of a sentence "…/h.md."; not "…/h.md.bak"
-PATH = re.compile(r"(?<![\w:/.~=-])(~?/[^\s`'\"<>()\[\]|]+?\.md)(?![\w-]|\.\w)")
+# a path in backticks, spaces and all, as /session-handoffs writes it ("`~/My Vault/h.md`"); else
+# one not part of a URL or a query: "~/x/handoff.md", "(~/…/h.md)", and at the end of a
+# sentence "…/h.md."; not "…/h.md.bak"
+PATH = re.compile(
+    r"`(~?/[^`\n]+?\.md)`|(?<![\w:/.~=-])(~?/[^\s`'\"<>()\[\]|]+?\.md)(?![\w-]|\.\w)"
+)
 WIKILINK = re.compile(r"\[\[([^\]|#]+)[^\]]*\]\]")
 BOLD = re.compile(r"\*\*(.+?)\*\*")
 DATED = re.compile(r"(?<!\d)20\d\d[-_]?[01]\d[-_]?[0-3]\d")
@@ -72,6 +76,8 @@ BANNER = re.compile(
     re.I,
 )
 EDIT_TOOLS = ("Write", "Edit")
+# states of a session that no longer works from its note: crashed, or `claude stop`/`kill`-ed
+GONE = ("failed", "stopped")
 # user entries that aren't a request: a local command (/model, /clear) or a ! shell line and
 # their output, and a background task's notification. A skill command starts
 # "<command-message>" and is one.
@@ -159,7 +165,7 @@ def wikilink(vault, name):
 
 def note_of(text, vault):
     """Return the item's first link to a handoff note (maybe a file that doesn't exist), or None."""
-    links = [(m.start(), Path(m.group(1)).expanduser()) for m in PATH.finditer(text)]
+    links = [(m.start(), Path(m[1] or m[2]).expanduser()) for m in PATH.finditer(text)]
     links += [(m.start(), wikilink(vault, m.group(1))) for m in WIKILINK.finditer(text)]
     return next((p for _, p in sorted(links) if is_handoff(p)), None)
 
@@ -263,7 +269,7 @@ def created(claude_dir, sid):
 
 def sessions(me, claude_dir):
     """Return {session id: (name, state)}, oldest first, for the sessions, this one included:
-    running, or in the background and finished but not failed."""
+    running, or in the background and finished but neither failed nor stopped."""
     if os.environ.get("SANDBOX_RUNTIME"):
         raise SystemExit(
             "Claude Code's sandbox lists running sessions as failed, so they can't be checked. "
@@ -280,7 +286,7 @@ def sessions(me, claude_dir):
             "`claude agents --json` doesn't list this session, so the running sessions can't be "
             "checked. Run this outside the sandbox."
         )
-    live = [s for s in listed if s.get("sessionId") and s.get("state") != "failed"]
+    live = [s for s in listed if s.get("sessionId") and s.get("state") not in GONE]
     # startedAt moves when a session is resumed or respawned: it only breaks ties
     live.sort(
         key=lambda s: (created(claude_dir, s["sessionId"]), s.get("startedAt") or 0)

@@ -126,6 +126,7 @@ class Parsing(unittest.TestCase):
         self.assertEqual(
             kickoff.title("S2 drain [[x-handoff]] `~/a/handoff.md`"), "S2 drain"
         )
+        self.assertEqual(kickoff.title("S2 drain `~/My Vault/handoff.md`"), "S2 drain")
 
     def test_slug_is_short_and_unique(self):
         taken = {"s2-drain"}
@@ -178,6 +179,15 @@ class Links(unittest.TestCase):
             self.note("resume from ~/p/handoff_s2.md."), HOME / "p/handoff_s2.md"
         )
         self.assertIsNone(self.note("old copy ~/p/handoff_s2.md.bak"))
+
+    def test_a_path_with_spaces_is_found_in_backticks(self):
+        # an iCloud vault: /session-handoffs writes "- [ ] **<title>** `<path>`"
+        icloud = "~/Library/Mobile Documents/iCloud~md~obsidian/Documents/V/handoffs"
+        self.assertEqual(
+            self.note(f"**a** `{icloud}/handoff_x.md` (snapshot)"),
+            Path(icloud).expanduser() / "handoff_x.md",
+        )
+        self.assertIsNone(self.note("a ~/My Vault/handoff_x.md"))
 
     def test_first_handoff_link_wins_and_others_are_ignored(self):
         text = (
@@ -335,15 +345,11 @@ class Sessions(unittest.TestCase):
         with self.assertRaisesRegex(SystemExit, "daemon not running"):
             self.listed(mock.Mock(returncode=1, stderr="daemon not running\n"))
 
-    def test_lists_itself_and_others_oldest_first_but_not_failed_background_sessions(
-        self,
-    ):
-        failed = {
-            "sessionId": "33" * 16,
-            "name": "broke",
-            "kind": "background",
-            "state": "failed",
-        }
+    def test_lists_itself_and_others_oldest_first_but_not_failed_or_stopped_ones(self):
+        failed, stopped = (
+            {"sessionId": c * 16, "name": c, "kind": "background", "state": state}
+            for c, state in (("33", "failed"), ("55", "stopped"))
+        )
         done = {
             "sessionId": "44" * 16,
             "name": "idle",
@@ -355,6 +361,7 @@ class Sessions(unittest.TestCase):
             agents(
                 {"sessionId": ME, "name": "me", "startedAt": 3},
                 failed,
+                stopped,
                 done,
                 {"sessionId": OTHER, "name": "n-22", "startedAt": 2},
             )
@@ -532,7 +539,7 @@ class Main(unittest.TestCase):
 
     def prompt(self, note):
         return (
-            f"Can you open {kickoff.tilde(note)} and tell me what I should do next? End with "
+            f"Can you open `{kickoff.tilde(note)}` and tell me what I should do next? End with "
             "one plain line, no formatting: Next: <one step> · Needs me: yes/no · Time: "
             "<estimate>"
         )
@@ -562,6 +569,15 @@ class Main(unittest.TestCase):
         self.daily.write_text(f"## 🎯 Today's Focus\n1. **Top thing** `{self.free}`\n")
         rows, _ = self.run_main("--dry-run")
         self.assertEqual(rows["1"][1:3], ["would open", "top-thing"])
+
+    def test_a_note_in_a_folder_with_a_space_opens_with_its_path_in_backticks(self):
+        note = self.root / "My Vault" / "handoff_x.md"
+        note.parent.mkdir()
+        note.write_text("# note\n")
+        self.daily.write_text(f"## 🎯 Today's Focus\n- [ ] **Vault work** `{note}`\n")
+        rows, calls = self.run_main()
+        self.assertEqual(rows["1"][1], "opened")
+        self.assertEqual(calls[0][0][-1], self.prompt(note))
 
     def test_an_item_whose_note_is_three_working_days_old_is_flagged_but_still_opens(
         self,
