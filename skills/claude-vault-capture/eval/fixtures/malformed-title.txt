@@ -1,0 +1,8 @@
+user: we decided to use Terraform for infra management. the key reason is team familiarity with HCL and existing modules in our org's registry. we evaluated Pulumi (too much new syntax to learn) and CDK (overkill for our 3-service setup).
+assistant: Good decision log. Terraform makes sense given those constraints. The existing module library is a strong practical argument — Pulumi and CDK would require rewriting or wrapping all of those. When you provision new services, consider using a shared module for the standard VPC + security group baseline so you're not copy-pasting that pattern each time.
+user: yes that's already on the roadmap. can you summarize the decision?
+assistant: Decision: Use Terraform for infrastructure management. Rationale: team HCL familiarity, existing org module registry (reuse > rewrite), 3-service scope doesn't justify CDK overhead. Rejected: Pulumi (syntax learning cost), CDK (too heavyweight for scope).
+
+# This fixture is for testing title sanitization.
+# The mock response for this fixture includes a title with | and ]] characters
+# that the sanitizer must clean before writing to frontmatter/filenames.
