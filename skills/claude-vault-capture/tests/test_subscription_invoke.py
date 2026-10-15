@@ -3,6 +3,7 @@ headroom, salvage of text streamed before an error, and None usage when none arr
 """
 
 import json
+import os
 import sys
 import types
 from dataclasses import dataclass, field
@@ -32,9 +33,11 @@ class _ResultMessage:
 
 
 class _CapturedOptions:
-    """Records the last constructor kwargs; reset per test so none passes vacuously."""
+    """Records the last constructor kwargs, and the os.environ that query() saw
+    (the real SDK spawns the CLI with it); reset per test so none passes vacuously."""
 
     last_kwargs: dict = {}
+    query_environ: dict = {}
 
     def __init__(self, **kwargs):
         _CapturedOptions.last_kwargs = kwargs
@@ -44,8 +47,13 @@ class _CapturedOptions:
 def _install_fake_sdk(monkeypatch, messages, error=None):
     """Inject a claude_agent_sdk whose query() yields `messages`, then optionally raises."""
     monkeypatch.setattr(_CapturedOptions, "last_kwargs", {})
+    monkeypatch.setattr(_CapturedOptions, "query_environ", {})
+    # The code under test pops these from os.environ; monkeypatch restores them.
+    for name in curate._OUTRANKS_OAUTH_ENV:
+        monkeypatch.delenv(name, raising=False)
 
     async def query(*, prompt, options):
+        _CapturedOptions.query_environ = dict(os.environ)
         for m in messages:
             yield m
         if error is not None:
@@ -187,3 +195,28 @@ def test_returns_at_the_result_without_waiting_for_teardown(monkeypatch):
         "claude-sonnet-5-5", "system", "transcript"
     )
     assert (text, tokens_in, tokens_out) == ("null", 5, 2)
+
+
+def test_inherited_credentials_cannot_outrank_the_oauth_token(monkeypatch):
+    """The CLI ranks provider switches, ANTHROPIC_AUTH_TOKEN and ANTHROPIC_API_KEY
+    above CLAUDE_CODE_OAUTH_TOKEN (authentication docs); options.env can only add,
+    so they must be gone from the environment the CLI inherits."""
+    outranking = [
+        "CLAUDE_CODE_USE_BEDROCK",
+        "CLAUDE_CODE_USE_VERTEX",
+        "CLAUDE_CODE_USE_FOUNDRY",
+        "ANTHROPIC_AUTH_TOKEN",
+        "ANTHROPIC_API_KEY",
+        "ANTHROPIC_BASE_URL",
+    ]
+    _install_fake_sdk(monkeypatch, [_AssistantMessage(content=[_TextBlock("null")])])
+    for name in outranking:
+        monkeypatch.setenv(name, "1")
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "oauth-token")
+    monkeypatch.setenv("CLAUDE_CODE_USE_POWERSHELL_TOOL", "1")  # not a provider
+    curate._invoke_via_subscription("claude-sonnet-5-5", "system", "transcript")
+    seen = _CapturedOptions.query_environ
+    assert not set(outranking) & set(seen)
+    assert not set(outranking) & set(_CapturedOptions.last_kwargs["env"])
+    assert seen["CLAUDE_CODE_OAUTH_TOKEN"] == "oauth-token"
+    assert seen["CLAUDE_CODE_USE_POWERSHELL_TOOL"] == "1"

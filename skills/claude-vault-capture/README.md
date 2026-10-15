@@ -119,6 +119,8 @@ Paste it into the plugin's `oauth_token` config field (stored in your OS keychai
 
 The same applies to the API-key fallback file `~/.claude_vault_token`.
 
+The curation run drops the credentials and provider settings it inherits from your environment (`ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_BASE_URL`, `CLAUDE_CODE_USE_BEDROCK`/`_VERTEX`/`_FOUNDRY` and similar): Claude Code would use them ahead of the OAuth token, or send the token to another endpoint, and bill something other than your plan.
+
 **Trade-offs:** background captures draw from the *same* rolling rate limit as your interactive Claude Code usage, and `cost_usd` in the log becomes an *estimated* API-equivalent rather than a billed amount.
 
 ## Consuming captures: the Inbox contract

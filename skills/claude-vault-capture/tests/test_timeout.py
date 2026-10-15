@@ -185,3 +185,23 @@ def test_api_client_keeps_the_sdk_retries(monkeypatch):
     with pytest.raises(RuntimeError):
         curate._invoke_via_api_key("m", 10, "sys", "text")
     assert seen["max_retries"] == 2
+
+
+def test_api_client_ignores_an_inherited_bearer_token(monkeypatch):
+    """Hooks inherit the parent env; an explicit api_key keeps the SDK from also
+    sending ANTHROPIC_AUTH_TOKEN as `Authorization: Bearer`."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "plugin-key")
+    monkeypatch.setenv("ANTHROPIC_AUTH_TOKEN", "gateway-token")
+    seen = {}
+
+    class _Client(anthropic.Anthropic):
+        def __init__(self, **kwargs):
+            super().__init__(**kwargs)
+            seen["client"] = self
+            raise RuntimeError("stop after construction")
+
+    monkeypatch.setattr(anthropic, "Anthropic", _Client)
+    with pytest.raises(RuntimeError):
+        curate._invoke_via_api_key("m", 10, "sys", "text")
+    assert seen["client"].api_key == "plugin-key"
+    assert seen["client"].auth_token is None

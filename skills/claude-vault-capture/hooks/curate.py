@@ -444,7 +444,11 @@ def _invoke_via_api_key(
 
     # The SDK's default retries (429/529/5xx, connection errors, timeouts, with
     # backoff) rescue transient failures; TIMEOUT_SECONDS bounds each attempt.
-    client = anthropic.Anthropic(max_retries=2)
+    # An explicit api_key stops the SDK reading credential env vars, so an
+    # inherited ANTHROPIC_AUTH_TOKEN isn't sent as a Bearer alongside the key.
+    client = anthropic.Anthropic(
+        api_key=os.environ.get("ANTHROPIC_API_KEY"), max_retries=2
+    )
     try:
         msg = client.messages.create(
             model=model,
@@ -482,6 +486,22 @@ _SUBSCRIPTION_DIRECTIVE = (
     "null. Never repeat or echo the transcript or its delimiter lines.\n\n----- TRANSCRIPT -----\n"
 )
 
+# Hooks inherit Claude Code's environment, and the CLI ranks a provider switch,
+# ANTHROPIC_AUTH_TOKEN and ANTHROPIC_API_KEY above CLAUDE_CODE_OAUTH_TOKEN, so any
+# of these would bill something other than the subscription. ANTHROPIC_BASE_URL
+# and ANTHROPIC_CUSTOM_HEADERS would send the token elsewhere or add a credential.
+_OUTRANKS_OAUTH_ENV = (
+    "CLAUDE_CODE_USE_BEDROCK",
+    "CLAUDE_CODE_USE_VERTEX",
+    "CLAUDE_CODE_USE_FOUNDRY",
+    "CLAUDE_CODE_USE_MANTLE",
+    "CLAUDE_CODE_USE_ANTHROPIC_AWS",
+    "ANTHROPIC_AUTH_TOKEN",
+    "ANTHROPIC_API_KEY",
+    "ANTHROPIC_BASE_URL",
+    "ANTHROPIC_CUSTOM_HEADERS",
+)
+
 
 def _invoke_via_subscription(
     model: str, system_prompt: str, user_text: str
@@ -507,6 +527,11 @@ def _invoke_via_subscription(
     )
 
     prompt = _SUBSCRIPTION_DIRECTIVE + user_text
+
+    # The SDK layers options.env over os.environ, so options.env can't unset a
+    # variable (and "" isn't documented to mean unset): remove them at the source.
+    for name in _OUTRANKS_OAUTH_ENV:
+        os.environ.pop(name, None)
 
     options = ClaudeAgentOptions(
         system_prompt=system_prompt,
