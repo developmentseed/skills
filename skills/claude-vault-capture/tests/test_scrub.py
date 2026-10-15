@@ -688,6 +688,7 @@ class TestScrubOutput:
             "Kq8vN2xR7mW4pL9sT3yB6cF1hJ5dG0aZ",  # base62, unknown vendor
             "dGhpcyBpcyBhIHRlc3Qgb2YgYmFzZTY0IGVuY29kaW5n",  # base64
             "Kq8vN2xR7mW4pL9sT3yB6cF1",
+            "Kq8vN2xR7mW4pK9sT3yB6cF8",  # 24 chars with repeats: under a fixed 4.5 floor
         ],
     )
     def test_random_token_redacted(self, token):
@@ -707,6 +708,7 @@ class TestScrubOutput:
             "Inbox/auto/2026-10-15-fix-pr16-review-subscription-env-1393c47a.md",
             "tests/test_subscription_invoke.py::test_inherited_credentials_v2",
             "s3://bucket/Kq8vN2xR/mW4pL9sT/3yB6cF1h.zarr",
+            "https://docs.google.com/document/d/1Kq8vN2xR7mW4pL9sT3yB6cF1hJ5dG0aZxYw/edit",
         ],
     )
     def test_ids_hashes_and_paths_survive(self, text):
