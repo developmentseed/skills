@@ -677,3 +677,47 @@ class TestNewRulesAreIdempotent:
         twice, counts = scrub(once)
         assert twice == once
         assert counts["kv_secret"] == counts["basic_auth"] == 0
+
+
+class TestScrubOutput:
+    """scrub_output: the rules, then a random-token pass for model-written text."""
+
+    @pytest.mark.parametrize(
+        "token",
+        [
+            "Kq8vN2xR7mW4pL9sT3yB6cF1hJ5dG0aZ",  # base62, unknown vendor
+            "dGhpcyBpcyBhIHRlc3Qgb2YgYmFzZTY0IGVuY29kaW5n",  # base64
+            "Kq8vN2xR7mW4pL9sT3yB6cF1",
+        ],
+    )
+    def test_random_token_redacted(self, token):
+        from scrub import scrub_output
+
+        out = scrub_output(f"export VENDOR={token}; deploy")
+        assert token not in out
+        assert "<redacted:" in out
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "commit 5251002a9f86d081884c7d659a2feaa0c55ad015",
+            "session 0b9f2c1e-4d3a-4b5c-9e8f-7a6b5c4d3e2f",
+            "sha256:9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+            "S2B_MSIL2A_20240101T102429_N0510_R065_T32TQM_20240101T130146",
+            "Inbox/auto/2026-10-15-fix-pr16-review-subscription-env-1393c47a.md",
+            "tests/test_subscription_invoke.py::test_inherited_credentials_v2",
+            "s3://bucket/Kq8vN2xR/mW4pL9sT/3yB6cF1h.zarr",
+        ],
+    )
+    def test_ids_hashes_and_paths_survive(self, text):
+        from scrub import scrub_output
+
+        assert scrub_output(text) == text
+
+    def test_idempotent_and_runs_the_rules(self):
+        from scrub import scrub_output
+
+        once = scrub_output("password: hunter2 and Kq8vN2xR7mW4pL9sT3yB6cF1hJ5dG0aZ")
+        assert "<redacted:kv_secret>" in once
+        assert "<redacted:high_entropy>" in once
+        assert scrub_output(once) == once

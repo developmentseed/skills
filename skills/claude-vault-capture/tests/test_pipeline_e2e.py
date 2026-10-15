@@ -124,6 +124,35 @@ class TestScrubbingStages:
         assert "abc123SECRETtoken456value" not in written
         assert "<redacted:bearer>" in written
 
+    def test_output_scrub_redacts_an_unknown_random_token(
+        self, run_main, monkeypatch, temp_vault
+    ):
+        """No rule knows the shape; the note-only random-token pass catches it."""
+        import curate
+
+        monkeypatch.setenv("CAPTURE_MOCK_SDK", "1")
+        token = "Kq8vN2xR7mW4pL9sT3yB6cF1hJ5dG0aZ"
+        sha = "5251002" + "a" * 33
+        monkeypatch.setattr(
+            curate,
+            "_call_path_a",
+            lambda *a, **kw: {
+                "title": "Runbook: rotate the vendor key",
+                "type": "runbook",
+                "body": f"Set VENDOR={token} then deploy {sha}.",
+                "source_links": [],
+                "tags": [],
+            },
+        )
+
+        run_main(_transcript("adr-worthy"), "1eaf778899aabbcc0005", "/tmp")
+
+        written = next((temp_vault.vault_dir / "Inbox" / "auto").glob("*.md"))
+        text = written.read_text()
+        assert token not in text
+        assert "<redacted:high_entropy>" in text
+        assert sha in text
+
 
 def _write_jsonl(path: pathlib.Path, rows: list[dict]) -> pathlib.Path:
     path.write_text("\n".join(json.dumps(r) for r in rows) + "\n")

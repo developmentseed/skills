@@ -914,12 +914,12 @@ def run_capture(
 
     # ── 8. scrub model output (title, body, tags, source_links) ──────────────
     if result_a:
-        result_a["title"], _ = scrub_mod.scrub(result_a.get("title", ""))
-        result_a["body"], _ = scrub_mod.scrub(result_a.get("body", ""))
+        result_a["title"] = scrub_mod.scrub_output(result_a.get("title", ""))
+        result_a["body"] = scrub_mod.scrub_output(result_a.get("body", ""))
         for key in ("tags", "source_links"):  # untrusted: may be non-lists/non-strings
             vals = result_a.get(key, [])
             result_a[key] = (
-                [scrub_mod.scrub(str(v))[0] for v in vals]
+                [scrub_mod.scrub_output(str(v)) for v in vals]
                 if isinstance(vals, list)
                 else []
             )
