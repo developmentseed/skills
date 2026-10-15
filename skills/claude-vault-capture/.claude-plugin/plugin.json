@@ -17,7 +17,7 @@
     "anthropic_api_key": {
       "type": "string",
       "title": "Anthropic API key",
-      "description": "API key for metered (default) mode. REQUIRED unless you set 'Bill to Claude subscription' below — with neither, every capture aborts before the model call and writes no note and no log entry. Note that Claude Code strips the environment it runs hooks in, so an ANTHROPIC_API_KEY exported in your shell profile usually does NOT reach the worker; set it here (stored in your OS keychain) or in ~/.claude_vault_token (which must be chmod 600, or the hook refuses it).",
+      "description": "API key for metered (default) mode. REQUIRED unless you set 'Bill to Claude subscription' below — with neither, every capture aborts before the model call and writes no note and no log entry. Hooks inherit Claude Code's environment, so an ANTHROPIC_API_KEY exported in your shell profile reaches the worker only when Claude Code was started from that shell (the desktop app and some IDE launchers don't load it); set it here (stored in your OS keychain) or in ~/.claude_vault_token (which must be chmod 600, or the hook refuses it).",
       "sensitive": true
     },
     "use_subscription": {

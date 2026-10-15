@@ -100,9 +100,9 @@ if [[ "$CAPTURE_VAULT_DIR" != /* ]]; then
     exit 0
 fi
 
-# Claude Code sanitizes its environment before spawning hooks, so credentials are
-# often absent even when the desktop app has them. Resolve from plugin config,
-# then fall back to token files.
+# Hooks inherit Claude Code's environment, which lacks shell-profile exports when
+# Claude Code was launched from the desktop app or an IDE. Resolve from plugin
+# config, then fall back to token files.
 if [[ "${CAPTURE_USE_SUBSCRIPTION:-}" == "1" ]]; then
     # OAuth token from `claude setup-token`.
     : "${CLAUDE_CODE_OAUTH_TOKEN:=${CLAUDE_PLUGIN_OPTION_OAUTH_TOKEN:-}}"
