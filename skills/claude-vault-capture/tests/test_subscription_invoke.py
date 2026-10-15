@@ -1,0 +1,229 @@
+"""_invoke_via_subscription against a fake claude_agent_sdk: tools disabled, turn
+headroom, salvage of text streamed before an error, and None usage when none arrived.
+"""
+
+import json
+import os
+import sys
+import types
+from dataclasses import dataclass, field
+
+import pytest
+
+import curate
+
+
+@dataclass
+class _TextBlock:
+    text: str
+
+
+@dataclass
+class _AssistantMessage:
+    content: list = field(default_factory=list)
+    error: str | None = None
+
+
+@dataclass
+class _ResultMessage:
+    usage: dict | None = None
+    is_error: bool = False
+    subtype: str = "success"
+    result: str | None = None
+
+
+class _CapturedOptions:
+    """Records the last constructor kwargs, and the os.environ that query() saw
+    (the real SDK spawns the CLI with it); reset per test so none passes vacuously."""
+
+    last_kwargs: dict = {}
+    query_environ: dict = {}
+
+    def __init__(self, **kwargs):
+        _CapturedOptions.last_kwargs = kwargs
+        self.__dict__.update(kwargs)
+
+
+def _install_fake_sdk(monkeypatch, messages, error=None):
+    """Inject a claude_agent_sdk whose query() yields `messages`, then optionally raises."""
+    monkeypatch.setattr(_CapturedOptions, "last_kwargs", {})
+    monkeypatch.setattr(_CapturedOptions, "query_environ", {})
+    # The code under test pops these from os.environ; monkeypatch restores them.
+    for name in curate._OUTRANKS_OAUTH_ENV:
+        monkeypatch.delenv(name, raising=False)
+
+    async def query(*, prompt, options):
+        _CapturedOptions.query_environ = dict(os.environ)
+        for m in messages:
+            yield m
+        if error is not None:
+            raise error
+
+    fake = types.ModuleType("claude_agent_sdk")
+    fake.query = query
+    fake.ClaudeAgentOptions = _CapturedOptions
+    fake.AssistantMessage = _AssistantMessage
+    fake.TextBlock = _TextBlock
+    fake.ResultMessage = _ResultMessage
+    monkeypatch.setitem(sys.modules, "claude_agent_sdk", fake)
+
+
+def test_clean_run_returns_text_and_tokens(monkeypatch):
+    _install_fake_sdk(
+        monkeypatch,
+        [
+            _AssistantMessage(content=[_TextBlock('{"title": "x"}')]),
+            _ResultMessage(
+                usage={
+                    "input_tokens": 10,
+                    "cache_creation_input_tokens": 20,
+                    "cache_read_input_tokens": 30,
+                    "output_tokens": 7,
+                }
+            ),
+        ],
+    )
+    text, tokens_in, tokens_out = curate._invoke_via_subscription(
+        "claude-sonnet-5-5", "system", "transcript"
+    )
+    assert text == '{"title": "x"}'
+    assert tokens_in == 60
+    assert tokens_out == 7
+
+
+def test_options_disable_tools_and_leave_turn_headroom(monkeypatch):
+    """allowed_tools=[] only skips prompting; tools=[] is what removes the toolset."""
+    _install_fake_sdk(monkeypatch, [_AssistantMessage(content=[_TextBlock("null")])])
+    curate._invoke_via_subscription("claude-sonnet-5-5", "system", "transcript")
+    assert _CapturedOptions.last_kwargs["tools"] == []
+    assert _CapturedOptions.last_kwargs["allowed_tools"] == []
+    assert _CapturedOptions.last_kwargs["max_turns"] > 1
+
+
+def test_multi_turn_preamble_is_not_prepended_to_reply(monkeypatch):
+    """Only the final message is the reply; a preamble would break exact `null`."""
+    _install_fake_sdk(
+        monkeypatch,
+        [
+            _AssistantMessage(content=[_TextBlock("Let me examine the transcript.")]),
+            _AssistantMessage(content=[_TextBlock("null")]),
+            _ResultMessage(usage={"input_tokens": 5, "output_tokens": 2}),
+        ],
+    )
+    text, _, _ = curate._invoke_via_subscription(
+        "claude-sonnet-5-5", "system", "transcript"
+    )
+    assert text == "null"
+
+
+def test_error_after_streamed_reply_is_salvaged_with_unknown_usage(monkeypatch):
+    _install_fake_sdk(
+        monkeypatch,
+        [
+            _AssistantMessage(content=[_TextBlock("Looking at the session. ")]),
+            _AssistantMessage(content=[_TextBlock('{"title": "kept"}')]),
+        ],
+        error=Exception(
+            "Claude Code returned an error result: Reached maximum number of turns (4)"
+        ),
+    )
+    text, tokens_in, tokens_out = curate._invoke_via_subscription(
+        "claude-sonnet-5-5", "system", "transcript"
+    )
+    # On error the whole stream is kept (_salvage_artifact finds the JSON later);
+    # usage that never arrived is None, not a fake 0.
+    assert text == 'Looking at the session. {"title": "kept"}'
+    assert tokens_in is None
+    assert tokens_out is None
+
+
+def test_error_before_any_reply_still_raises(monkeypatch):
+    _install_fake_sdk(
+        monkeypatch,
+        [],
+        error=Exception("Claude Code returned an error result: success"),
+    )
+    with pytest.raises(Exception, match="error result"):
+        curate._invoke_via_subscription("claude-sonnet-5-5", "system", "transcript")
+
+
+def test_run_is_isolated_like_api_mode(monkeypatch):
+    """No user settings (else this plugin's own SessionEnd hook fires on the
+    curation session), no thinking, low effort, and output capped like API mode."""
+    _install_fake_sdk(monkeypatch, [_AssistantMessage(content=[_TextBlock("null")])])
+    curate._invoke_via_subscription("claude-sonnet-5-5", "system", "transcript")
+    kw = _CapturedOptions.last_kwargs
+    assert kw["setting_sources"] == []
+    assert "thinking" not in kw
+    assert kw["effort"] == "low"
+    assert kw["env"]["CLAUDE_CODE_DISABLE_THINKING"] == "1"
+    extra_body = json.loads(kw["env"]["CLAUDE_CODE_EXTRA_BODY"])
+    assert extra_body == {"thinking": {"type": "between_tools"}}
+    assert kw["env"]["CLAUDE_CODE_MAX_OUTPUT_TOKENS"] == str(curate.MAX_TOKENS_A)
+
+
+def test_curation_run_is_not_saved_as_a_session(monkeypatch):
+    """Each saved run would be a ~170 KB transcript holding the scrubbed session."""
+    _install_fake_sdk(monkeypatch, [_AssistantMessage(content=[_TextBlock("null")])])
+    curate._invoke_via_subscription("claude-sonnet-5-5", "system", "transcript")
+    assert _CapturedOptions.last_kwargs["env"]["CLAUDE_CODE_SKIP_PROMPT_HISTORY"] == "1"
+
+
+def test_assistant_error_is_raised_not_parsed_as_a_reply(monkeypatch):
+    login = _TextBlock("Invalid API key · Please run /login")
+    _install_fake_sdk(
+        monkeypatch,
+        [_AssistantMessage(content=[login], error="authentication_failed")],
+    )
+    with pytest.raises(RuntimeError, match="authentication_failed"):
+        curate._invoke_via_subscription("claude-sonnet-5-5", "system", "transcript")
+
+
+def test_error_result_without_a_reply_raises(monkeypatch):
+    failed = _ResultMessage(
+        usage={}, is_error=True, subtype="error_during_execution", result="boom"
+    )
+    _install_fake_sdk(monkeypatch, [failed])
+    with pytest.raises(RuntimeError, match="error_during_execution"):
+        curate._invoke_via_subscription("claude-sonnet-5-5", "system", "transcript")
+
+
+def test_returns_at_the_result_without_waiting_for_teardown(monkeypatch):
+    _install_fake_sdk(
+        monkeypatch,
+        [
+            _AssistantMessage(content=[_TextBlock("null")]),
+            _ResultMessage(usage={"input_tokens": 5, "output_tokens": 2}),
+            _AssistantMessage(content=[_TextBlock("late junk")]),
+        ],
+        error=Exception("teardown failure"),
+    )
+    text, tokens_in, tokens_out = curate._invoke_via_subscription(
+        "claude-sonnet-5-5", "system", "transcript"
+    )
+    assert (text, tokens_in, tokens_out) == ("null", 5, 2)
+
+
+def test_inherited_credentials_cannot_outrank_the_oauth_token(monkeypatch):
+    """The CLI ranks provider switches, ANTHROPIC_AUTH_TOKEN and ANTHROPIC_API_KEY
+    above CLAUDE_CODE_OAUTH_TOKEN (authentication docs); options.env can only add,
+    so they must be gone from the environment the CLI inherits."""
+    outranking = [
+        "CLAUDE_CODE_USE_BEDROCK",
+        "CLAUDE_CODE_USE_VERTEX",
+        "CLAUDE_CODE_USE_FOUNDRY",
+        "ANTHROPIC_AUTH_TOKEN",
+        "ANTHROPIC_API_KEY",
+        "ANTHROPIC_BASE_URL",
+    ]
+    _install_fake_sdk(monkeypatch, [_AssistantMessage(content=[_TextBlock("null")])])
+    for name in outranking:
+        monkeypatch.setenv(name, "1")
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "oauth-token")
+    monkeypatch.setenv("CLAUDE_CODE_USE_POWERSHELL_TOOL", "1")  # not a provider
+    curate._invoke_via_subscription("claude-sonnet-5-5", "system", "transcript")
+    seen = _CapturedOptions.query_environ
+    assert not set(outranking) & set(seen)
+    assert not set(outranking) & set(_CapturedOptions.last_kwargs["env"])
+    assert seen["CLAUDE_CODE_OAUTH_TOKEN"] == "oauth-token"
+    assert seen["CLAUDE_CODE_USE_POWERSHELL_TOOL"] == "1"

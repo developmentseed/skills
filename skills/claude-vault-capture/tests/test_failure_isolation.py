@@ -1,0 +1,174 @@
+"""Path A failure handling: no file written, skip_reason logged, and token/cost
+usage preserved when JSON parsing fails or the model returns null.
+"""
+
+import json
+
+from conftest import read_log
+
+
+def _make_transcript(n_turns=3, chars=600) -> list[dict]:
+    msgs = []
+    for _ in range(n_turns):
+        msgs.append({"role": "user", "content": "a" * chars})
+        msgs.append({"role": "assistant", "content": "reply"})
+    return msgs
+
+
+def _run_with_mock_a(tmp_path, monkeypatch, mock_a, sid="test-session"):
+    inbox_auto = tmp_path / "Inbox" / "auto"
+    inbox_auto.mkdir(parents=True, exist_ok=True)
+    log_file = tmp_path / "log.md"
+    index_file = tmp_path / "session-index.tsv"
+
+    monkeypatch.setenv("CAPTURE_MOCK_SDK", "1")
+    import curate
+
+    monkeypatch.setattr(curate, "_call_path_a", mock_a)
+
+    curate.run_capture(
+        transcript=_make_transcript(),
+        session_id=sid,
+        cwd=str(tmp_path),
+        vault_dir=str(tmp_path),
+        log_path=log_file,
+        index_path=index_file,
+        date_str="2026-05-10",
+    )
+    return read_log(log_file)[-1], inbox_auto
+
+
+class TestFailureHandling:
+    def test_path_a_error_writes_no_file_and_logs(self, tmp_path, monkeypatch):
+        entry, inbox_auto = _run_with_mock_a(
+            tmp_path,
+            monkeypatch,
+            mock_a=lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("boom")),
+            sid="test-a-error",
+        )
+        assert list(inbox_auto.glob("*.md")) == []
+        assert entry["path_a"] is None
+        assert entry["skip_reason_a"].startswith("error:")
+
+    def test_path_a_success_writes_file(self, tmp_path, monkeypatch):
+        entry, inbox_auto = _run_with_mock_a(
+            tmp_path,
+            monkeypatch,
+            mock_a=lambda *a, **kw: {
+                "title": "Decision: Use PostgreSQL",
+                "type": "decision",
+                "body": "We decided to use PostgreSQL because...",
+                "source_links": [],
+                "tags": ["backend"],
+                "tokens_in": 200,
+                "tokens_out": 100,
+                "cost_usd": 0.01,
+            },
+            sid="test-a-success",
+        )
+        assert len(list(inbox_auto.glob("*.md"))) == 1
+        assert entry["path_a"] is not None
+        assert entry["skip_reason_a"] is None
+
+
+class TestTokenCaptureOnFailure:
+    def test_model_returned_null_preserves_tokens(self, tmp_path, monkeypatch):
+        entry, _ = _run_with_mock_a(
+            tmp_path,
+            monkeypatch,
+            mock_a=lambda *a, **kw: {
+                "_null": True,
+                "tokens_in": 1200,
+                "tokens_out": 5,
+                "cost_usd": 0.0036,
+            },
+            sid="test-null-tokens",
+        )
+        assert entry["skip_reason_a"] == "model_returned_null"
+        assert entry["tokens_in_a"] == 1200
+        assert entry["tokens_out_a"] == 5
+        assert entry["cost_usd_a"] == 0.0036
+
+    def test_malformed_json_preserves_tokens(self, tmp_path, monkeypatch):
+        def mock_a_malformed(*a, **kw):
+            exc = json.JSONDecodeError("bad", "", 0)
+            exc.usage = {"tokens_in": 800, "tokens_out": 60, "cost_usd": 0.0003}
+            raise exc
+
+        entry, _ = _run_with_mock_a(
+            tmp_path, monkeypatch, mock_a=mock_a_malformed, sid="test-malformed-tokens"
+        )
+        assert entry["skip_reason_a"] == "malformed_json"
+        assert entry["tokens_in_a"] == 800
+        assert entry["tokens_out_a"] == 60
+        assert entry["cost_usd_a"] == 0.0003
+
+    def test_generic_error_logs_exception_message(self, tmp_path, monkeypatch):
+        """A bare type name (e.g. the SDK's literal `Exception`) is undiagnosable."""
+        import curate
+
+        recorded = []
+        monkeypatch.setattr(curate, "_log_error", lambda msg: recorded.append(msg))
+
+        def mock_a_sdk_error(*a, **kw):
+            raise Exception("Control request timeout: initialize")
+
+        entry, _ = _run_with_mock_a(
+            tmp_path, monkeypatch, mock_a=mock_a_sdk_error, sid="test-error-message"
+        )
+        assert entry["skip_reason_a"] == "error:Exception"
+        assert any("Control request timeout: initialize" in m for m in recorded)
+
+    def test_malformed_json_without_usage_attr(self, tmp_path, monkeypatch):
+        def mock_a_plain_error(*a, **kw):
+            raise json.JSONDecodeError("bad", "", 0)
+
+        entry, _ = _run_with_mock_a(
+            tmp_path,
+            monkeypatch,
+            mock_a=mock_a_plain_error,
+            sid="test-malformed-no-usage",
+        )
+        assert entry["skip_reason_a"] == "malformed_json"
+        assert entry["tokens_in_a"] is None
+        assert entry["cost_usd_a"] is None
+
+
+class TestOutcomesAfterThePaidCall:
+    def test_refusal_logs_its_own_reason_with_usage(self, tmp_path, monkeypatch):
+        import curate
+
+        def mock_a(*a, **kw):
+            exc = curate.ReplyError("refusal", 100, 0)
+            exc.usage = {"tokens_in": 100, "tokens_out": 0, "cost_usd": 0.0002}
+            raise exc
+
+        entry, _ = _run_with_mock_a(tmp_path, monkeypatch, mock_a, sid="t-refusal")
+        assert entry["skip_reason_a"] == "refusal"
+        assert entry["tokens_in_a"] == 100
+
+    def test_timeout_is_not_indexed_so_a_resume_retries(self, tmp_path, monkeypatch):
+        def mock_a(*a, **kw):
+            raise TimeoutError("slow")
+
+        entry, _ = _run_with_mock_a(tmp_path, monkeypatch, mock_a, sid="t-timeout")
+        assert entry["skip_reason_a"] == "timeout"
+        index = tmp_path / "session-index.tsv"
+        assert not index.exists() or "t-timeout" not in index.read_text()
+
+    def test_vault_write_failure_still_logs_the_paid_call(self, tmp_path, monkeypatch):
+        import curate
+
+        def read_only(*a, **kw):
+            raise PermissionError("read-only vault")
+
+        monkeypatch.setattr(curate, "_write_artifact", read_only)
+        artifact = {"title": "T", "type": "gotcha", "body": "B", "tags": []}
+        usage = {"tokens_in": 100, "tokens_out": 5, "cost_usd": 0.00025}
+
+        entry, _ = _run_with_mock_a(
+            tmp_path, monkeypatch, lambda *a, **kw: {**artifact, **usage}, sid="t-ro"
+        )
+        assert entry["skip_reason_a"] == "error:PermissionError"
+        assert entry["path_a"] is None
+        assert entry["tokens_in_a"] == 100

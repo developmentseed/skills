@@ -1,0 +1,30 @@
+user: I'm working on adding caching to the API layer. couple things: should I use Redis or in-process cache? and also my pytest setup is broken, getting import errors
+assistant: Two separate topics — let me take them one at a time.
+
+**Caching decision**: depends on your deployment model. If you're running multiple app instances (ECS, k8s), you need Redis — in-process caches don't share state across instances. If you're single-instance (single container, single process), in-process is simpler and faster. What's your setup?
+
+**Pytest import errors**: share the error and I can help.
+
+user: we run 3 ECS instances. and the pytest error is: ModuleNotFoundError: No module named 'app.config'
+assistant: **Redis it is** for the cache then. With 3 instances, in-process would give inconsistent cache hits. Use redis-py with a connection pool, set TTLs per cache key type (short for user data, longer for reference data).
+
+**pytest**: your `PYTHONPATH` isn't set. Add to pytest.ini or pyproject.toml:
+```
+[tool:pytest]
+pythonpath = .
+```
+Or run as `python -m pytest` which adds the current dir to sys.path automatically.
+
+user: thanks the pytest fix worked. on caching, we cache user preferences (TTL 5min) and product catalog (TTL 1h). what key scheme?
+assistant: Use namespace prefixes to avoid collisions:
+- User prefs: `user:prefs:{user_id}` → TTL 300s
+- Product catalog: `catalog:product:{product_id}` → TTL 3600s
+- Use `user:prefs:*` for bulk invalidation on user data changes
+
+Set `maxmemory-policy allkeys-lru` in Redis config so it gracefully evicts under memory pressure rather than returning errors.
+
+user: great setup
+assistant: Looks good. One thing to watch: if your ECS tasks restart, they'll all miss cache simultaneously (thundering herd). Consider staggering the deploys or adding jitter to your TTLs (±10%) to spread reloads.
+
+# Expected: Path A should return a decision about Redis vs in-process cache
+# Path B should summarize both the caching decision and the pytest fix

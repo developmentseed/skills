@@ -1,0 +1,8 @@
+# Runtime state lives under ${CLAUDE_PLUGIN_DATA}; curate.py falls back to
+# eval/state/ when run by hand from a checkout.
+eval/state/
+
+# Dev artifacts
+.venv/
+__pycache__/
+*.pyc
