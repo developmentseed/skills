@@ -145,12 +145,11 @@ class TestEnvVar:
         assert "# prod comment" in out
         assert "xyz" not in out
 
-    def test_lowercase_not_matched(self):
+    def test_lowercase_is_left_to_kv_secret(self):
         from scrub import scrub
 
-        text = "api_key=should_not_match"
-        out, counts = scrub(text)
-        assert out == text
+        out, counts = scrub("api_key=a1b2c3d4e5")
+        assert out == "api_key=<redacted:kv_secret>"
         assert counts["env_var"] == 0
 
     def test_multiline_mid_transcript(self):
@@ -195,13 +194,6 @@ class TestEnvVarBeyondLineStart:
 
         out, _ = scrub("DB_PASSWORD='p a s s'")
         assert "p a s s" not in out
-
-    def test_lowercase_still_not_matched(self):
-        from scrub import scrub
-
-        out, counts = scrub("api_key=should_not_match")
-        assert out == "api_key=should_not_match"
-        assert counts["env_var"] == 0
 
 
 class TestModernTokenFormats:
@@ -517,3 +509,171 @@ class TestProseIsLeftAlone:
         out, counts = scrub(text)
         assert out == text
         assert sum(counts.values()) == 0
+
+
+# Vendor tokens are assembled at runtime, like _pem(): push protection flags them
+# at rest even with a fake body.
+_B = "a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6q7R8s9T0"
+
+
+class TestKeyValueSecrets:
+    """JSON (.mcp.json / settings `env`), YAML, .ini and `=` forms, any key case."""
+
+    @pytest.mark.parametrize(
+        "text, secret",
+        [
+            ('"DATABRICKS_TOKEN": "a1b2c3d4e5f6a7b8"', "a1b2c3d4e5f6a7b8"),
+            ('"OPENAI_KEY": "abcd1234efgh5678"', "abcd1234efgh5678"),
+            ('{"apiKey": "x"}', '"x"'),
+            ("password: hunter2", "hunter2"),
+            ("  db_password: 'p a s s'", "p a s s"),
+            ("password: correcthorsebatterystaple", "correcthorse"),
+            ("api_key: a1b2c3d4e5", "a1b2c3d4e5"),
+            ("api_key=a1b2c3d4e5", "a1b2c3d4e5"),
+            ("password = hunter2", "hunter2"),
+            ("wget --password=hunter2 https://x", "hunter2"),
+            ("-H 'X-Api-Key: abcd1234'", "abcd1234"),
+            ("//registry.example.com/:_authToken=abc123def456", "abc123def456"),
+            ('{\\"client_secret\\": \\"s3cr3t\\"}', "s3cr3t"),
+            ("?api_key=abc123&format=json", "abc123"),
+        ],
+    )
+    def test_value_is_redacted_and_key_kept(self, text, secret):
+        from scrub import scrub
+
+        out, counts = scrub(text)
+        assert secret not in out
+        assert counts["kv_secret"] == 1
+        assert "<redacted:kv_secret>" in out
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "def f(token: str, password: str | None = None):",
+            "function g(password: string, apiKey?: string) {}",
+            "the password is required",
+            "Password: required for login",
+            "**Password:** stored in the team vault",
+            "api_key=None",
+            'api_key=os.environ["OPENAI_API_KEY"]',
+            "client = Client(api_key=api_key)",
+            "password=getpass.getpass()",
+            "token=self.token",
+            "token = get_token(user)",
+            '"max_tokens": 3000',
+            "max_tokens=3000",
+            '"token_type": "bearer"',
+            '"secret": true',
+            '"private_key": 0, "kv_secret": 0',
+            "if token == expected:",
+            "token := getToken()",
+            "password: ${{ secrets.DB_PASSWORD }}",
+            'admin_token="$(openssl rand -hex 32)"',
+            "existingSecret: postgres-credentials",
+            "?token=&page=2",
+        ],
+    )
+    def test_code_and_prose_are_left_alone(self, text):
+        from scrub import scrub
+
+        out, counts = scrub(text)
+        assert out == text
+        assert sum(counts.values()) == 0
+
+
+class TestBasicAuthHeaderAndCurl:
+    @pytest.mark.parametrize(
+        "text, kept",
+        [
+            ("Authorization: Basic dXNlcjpwYXNzd29yZA==", "Authorization: Basic "),
+            ("-H 'authorization: basic dXNlcjpwYXNz'", "authorization: basic "),
+            ('{"Authorization": "Basic dXNlcjpwYXNz"}', '"Authorization": "Basic '),
+            ("curl -u admin:s3cretpass https://x", "curl -u admin:"),
+            ("curl -s --user admin:s3cretpass https://x", "--user admin:"),
+            ("curl --user=admin:s3cretpass https://x", "--user=admin:"),
+        ],
+    )
+    def test_credentials_redacted_user_kept(self, text, kept):
+        from scrub import scrub
+
+        out, counts = scrub(text)
+        assert "s3cretpass" not in out
+        assert "dXNlcjpwYXNz" not in out
+        assert kept in out
+        assert counts["basic_auth"] == 1
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "curl -u admin https://x",  # prompts for the password
+            "git push -u origin main",
+            "docker run -u 1000:1000 image",
+            "basic auth is fine here",
+        ],
+    )
+    def test_unchanged(self, text):
+        from scrub import scrub
+
+        out, counts = scrub(text)
+        assert out == text
+        assert sum(counts.values()) == 0
+
+
+class TestMoreVendorTokens:
+    @pytest.mark.parametrize(
+        "token",
+        [
+            "sk_" + "live_" + _B[:24],
+            "sk_" + "test_" + _B[:24],
+            "rk_" + "live_" + _B[:24],
+            "whsec_" + _B[:32],
+            "gl" + "pat-" + _B[:20],
+            "hf_" + _B[:34],
+            "npm_" + _B[:36],
+            "pypi-" + "AgEIcHlwaS5vcmc" + _B + _B,
+            "dapi" + "0123456789abcdef" * 2,
+            "ya29." + _B[:30],
+            "ASIA" + "IOSFODNN7EXAMPL1",
+            "https://hooks.slack.com/services/T0123ABCD/B0123ABCD/" + _B[:24],
+        ],
+    )
+    def test_redacted(self, token):
+        from scrub import scrub
+
+        out, counts = scrub(f"value is {token} here")
+        assert out == "value is <redacted:token_prefix> here"
+        assert counts["token_prefix"] == 1
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            'hf_hub_download(repo_id="x")',
+            "npm_config_registry is set",
+            "the sk_live prefix is for production",
+        ],
+    )
+    def test_identifiers_untouched(self, text):
+        from scrub import scrub
+
+        out, counts = scrub(text)
+        assert out == text
+        assert counts["token_prefix"] == 0
+
+
+class TestNewRulesAreIdempotent:
+    @pytest.mark.parametrize(
+        "text",
+        [
+            '"apiKey": "x", password: hunter2',
+            "Authorization: Basic dXNlcjpwYXNz",
+            "curl -u admin:s3cretpass https://x",
+            '"OPENAI_KEY": "sk-' + _B[:20] + '"',
+        ],
+    )
+    def test_second_pass_finds_nothing(self, text):
+        from scrub import scrub
+
+        once, _ = scrub(text)
+        twice, counts = scrub(once)
+        assert twice == once
+        assert counts["kv_secret"] == counts["basic_auth"] == 0
