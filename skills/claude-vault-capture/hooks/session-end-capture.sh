@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 # SessionEnd hook entry point — returns in <200ms; all model work is backgrounded.
+# SessionEnd hooks share a 1.5 s budget, and a plugin hook's `timeout` can't raise
+# it, so hooks.json sets none.
 # Config arrives as CLAUDE_PLUGIN_OPTION_* env vars, state lives under
 # ${CLAUDE_PLUGIN_DATA}, and the worker runs via `uv run` (PEP 723 deps in curate.py).
 set -euo pipefail
