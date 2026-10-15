@@ -89,6 +89,17 @@ if [[ -z "${SESSION_ID:-}" || -z "${TRANSCRIPT_PATH:-}" ]]; then
     exit 0
 fi
 
+# Skip `claude -p` and Agent SDK runs: Claude Code sets CLAUDE_CODE_ENTRYPOINT
+# (undocumented) to sdk-cli for -p/non-TTY runs; the SDKs set sdk-py/sdk-ts.
+# Unset, cli, claude-desktop, claude-vscode and the rest are captured.
+case "${CLAUDE_CODE_ENTRYPOINT:-}" in
+    sdk-*)
+        printf 'CAPTURE_SKIP_SCRIPTED\t%s\t%s entrypoint=%s (claude -p / Agent SDK run)\n' \
+            "$NOW" "$SESSION_ID" "$CLAUDE_CODE_ENTRYPOINT" >> "$HOOKS_LOG"
+        exit 0
+        ;;
+esac
+
 # Guard: no vault, no destination — log and exit.
 if [[ -z "${CAPTURE_VAULT_DIR:-}" ]]; then
     printf 'CAPTURE_NOT_CONFIGURED\t%s\tCAPTURE_VAULT_DIR unset — set vault_dir in plugin config\n' \

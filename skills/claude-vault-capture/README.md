@@ -41,7 +41,7 @@ Runtime state (a dedup index and a per-session log) is kept in the plugin's pers
 
 ## Verify it's working
 
-The hook fires at session *end*, so this is about your **next** session, not the one you installed in. Make it a substantial one — short sessions are skipped by design.
+The hook fires at session *end*, so this is about your **next** session, not the one you installed in. Make it a substantial one — short sessions are skipped by design. So are `claude -p` and Agent SDK runs (those Claude Code marks with an `sdk-*` entrypoint).
 
 The log is the only check that distinguishes "working, nothing worth capturing" from "broken". Resolve the state directory first (`${CLAUDE_PLUGIN_DATA}` is set for the hook, not for your shell):
 
@@ -82,6 +82,7 @@ Check the `skip_reason_a` from the log above:
 | `CAPTURE_BAD_SETTING` | a numeric setting isn't a positive whole number; the default is used |
 | `CAPTURE_NO_INTERPRETER` / `CAPTURE_NO_PYTHON3` | install `uv` / `python3` (see Prerequisites) |
 | `CAPTURE_HOOK_JSON_UNPARSED` | report it — the hook payload didn't parse |
+| `CAPTURE_SKIP_SCRIPTED` | nothing to fix: a `claude -p` or Agent SDK run, skipped by design |
 
 ## Configuration
 

@@ -451,6 +451,35 @@ class TestGuards:
         assert not wait_for(invocation, timeout=0.5)
 
 
+class TestScriptedRuns:
+    @pytest.mark.parametrize("entrypoint", ["sdk-cli", "sdk-py", "sdk-ts"])
+    def test_scripted_run_backgrounds_nothing(self, tmp_path, entrypoint):
+        home = tmp_path / "home"
+        home.mkdir()
+        invocation = _build_plugin(home)
+
+        proc = _run_hook(home, extra_env={"CLAUDE_CODE_ENTRYPOINT": entrypoint})
+
+        assert proc.returncode == 0, proc.stderr
+        log = (home / ".claude" / "hooks.log").read_text()
+        assert "CAPTURE_SKIP_SCRIPTED" in log and f"entrypoint={entrypoint}" in log
+        assert "SESSION_END_RECEIVED" not in log
+        assert not wait_for(invocation, timeout=0.5)
+
+    @pytest.mark.parametrize(
+        "entrypoint", ["cli", "claude-desktop", "claude-vscode", ""]
+    )
+    def test_interactive_entrypoints_still_launch(self, tmp_path, entrypoint):
+        home = tmp_path / "home"
+        home.mkdir()
+        invocation = _build_plugin(home)
+
+        proc = _run_hook(home, extra_env={"CLAUDE_CODE_ENTRYPOINT": entrypoint})
+
+        assert proc.returncode == 0, proc.stderr
+        assert wait_for(invocation), "interactive session was not captured"
+
+
 class TestSubscriptionTokenFile:
     def test_owner_only_oauth_token_file_is_used(self, tmp_path):
         home = tmp_path / "home"

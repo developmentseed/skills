@@ -234,7 +234,12 @@ def is_duplicate_session(
 
 
 def is_below_threshold(messages: list[dict]) -> bool:
-    """< 3 user turns OR < 1500 chars of user content → True (skip)."""
+    """< 3 user-side entries OR < 1500 chars of their text → True (skip).
+
+    Tool results count as entries and injected skill text as chars, so this
+    gates on session activity, not typed prompts: a typed-prompts rule dropped
+    real notes and added calls on sessions skipped today (measured 2026-10).
+    """
     user_turns = [m for m in messages if m.get("role") == "user"]
     user_chars = sum(len(m.get("content", "")) for m in user_turns)
     return len(user_turns) < 3 or user_chars < 1500

@@ -1,6 +1,6 @@
 """Unit tests for the small-signal threshold check.
 
-Threshold: < 3 user turns OR < 1500 chars of user content → skip (OR logic).
+Threshold: < 3 user-side entries (tool results count) OR < 1500 chars of user-side text → skip (OR logic).
 """
 
 from curate import is_below_threshold
@@ -59,4 +59,14 @@ class TestThreshold:
             {"role": "assistant", "content": "b" * 600},
             {"role": "user", "content": "a" * 600},
         ]
+        assert is_below_threshold(msgs) is False
+
+    def test_tool_result_entries_count(self):
+        # Deliberate: the gate measures activity, so tool results are entries.
+        tool_result = {
+            "role": "user",
+            "content": "",
+            "blocks": [{"type": "tool_result", "content": "ok"}],
+        }
+        msgs = [{"role": "user", "content": "a" * 1600}, tool_result, tool_result]
         assert is_below_threshold(msgs) is False
