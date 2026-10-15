@@ -74,7 +74,9 @@ FIELDS=$(python3 -c "import json,sys; d=json.load(sys.stdin); print('\x1f'.join(
 IFS=$'\x1f' read -r TRANSCRIPT_PATH SESSION_ID CWD <<<"$FIELDS" || true
 
 # Guard: if we couldn't parse the fields (or python3 is missing), log why and bail.
-if [[ -z "$SESSION_ID" || -z "$TRANSCRIPT_PATH" ]]; then
+# `:-` because a failed `<<<` (bash 3.2 needs a temp file for it) leaves them
+# unset, and set -u would abort here before anything is logged.
+if [[ -z "${SESSION_ID:-}" || -z "${TRANSCRIPT_PATH:-}" ]]; then
     if command -v python3 >/dev/null 2>&1; then
         printf 'CAPTURE_HOOK_JSON_UNPARSED\t%s\tno session_id/transcript_path in hook JSON\n' \
             "$NOW" >> "$HOOKS_LOG"

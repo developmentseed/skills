@@ -422,6 +422,23 @@ class TestGuards:
         )
         assert not wait_for(invocation, timeout=0.5)
 
+    def test_failed_field_read_is_logged_not_an_unbound_abort(self, tmp_path):
+        """bash 3.2 needs a temp file for `<<<`; when that fails, read assigns
+        nothing. A BASH_ENV function shadowing the builtin reproduces that."""
+        home = tmp_path / "home"
+        home.mkdir()
+        invocation = _build_plugin(home)
+        failing_read = home / "failing-read.sh"
+        failing_read.write_text("read() { return 1; }\n")
+
+        proc = _run_hook(home, extra_env={"BASH_ENV": str(failing_read)})
+
+        assert proc.returncode == 0, proc.stderr
+        assert "unbound variable" not in proc.stderr
+        hooks_log = (home / ".claude" / "hooks.log").read_text()
+        assert "CAPTURE_HOOK_JSON_UNPARSED" in hooks_log
+        assert not wait_for(invocation, timeout=0.5)
+
     def test_unconfigured_vault_backgrounds_nothing(self, tmp_path):
         home = tmp_path / "home"
         home.mkdir()
