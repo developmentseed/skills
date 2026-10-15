@@ -112,7 +112,8 @@ RULES = [
         # only when they look like a secret (4+ chars with a digit, or a 16+ letter
         # run) and not like code: type names (`token: str`), prose (`Password:
         # **required**`), attribute access (`token=self.token`), or calls and
-        # subscripts (`api_key=os.environ[...]`).
+        # subscripts (`api_key=os.environ[...]`). The digit lookahead is bounded:
+        # unbounded, a long digit-free run rescanned from every key was quadratic.
         "pattern": (
             r"(?P<pre>(?<![\w.\-])(?P<q>\\?[\"']?)[\w.\-]*?"
             r"(?:(?i:password|passwd|passphrase|secret|token"
@@ -121,7 +122,7 @@ RULES = [
             r"(?P<v>\\?\"(?![${]|<redacted:)[^\"\n]+\"|'(?![${]|<redacted:)[^'\n]+'"
             r"|(?![A-Za-z_]\w*\.[A-Za-z_])"
             r"(?=" + _BARE + r"{4})"
-            r"(?=" + _BARE + r"*\d|[A-Za-z+/=]{16})" + _BARE + r"++(?![(\[{]))"
+            r"(?=" + _BARE + r"{0,256}\d|[A-Za-z+/=]{16})" + _BARE + r"++(?![(\[{]))"
         ),
         "replacement": r"\g<pre><redacted:kv_secret>",
     },

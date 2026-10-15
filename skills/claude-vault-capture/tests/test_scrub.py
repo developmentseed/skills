@@ -723,3 +723,17 @@ class TestScrubOutput:
         assert "<redacted:kv_secret>" in once
         assert "<redacted:high_entropy>" in once
         assert scrub_output(once) == once
+
+
+@pytest.mark.parametrize(
+    "line", ["password:" * 20000, "x_KEY=" * 30000], ids=["password", "x_KEY"]
+)
+def test_kv_secret_is_linear_on_long_runs(line):
+    """A pasted 180 KB line once took 12-17 s, holding the session lock throughout."""
+    import time
+
+    from scrub import scrub
+
+    start = time.perf_counter()
+    scrub(line)
+    assert time.perf_counter() - start < 2
