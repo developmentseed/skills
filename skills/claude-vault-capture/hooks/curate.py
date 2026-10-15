@@ -31,19 +31,14 @@ import zlib
 # Default token ceiling; CAPTURE_MAX_EST_TOKENS overrides it at call time.
 CAPTURE_MAX_EST_TOKENS: int = 50000
 
-# Slash commands whose sessions are not captured (empty by default).
-EXCLUDED_COMMANDS: list[str] = [
-    c.strip()
-    for c in os.environ.get("CAPTURE_EXCLUDED_COMMANDS", "").split(",")
-    if c.strip()
-]
 
-# Folders whose sessions are not captured (empty by default).
-EXCLUDED_PATHS: list[str] = [
-    p.strip()
-    for p in os.environ.get("CAPTURE_EXCLUDED_PATHS", "").split(",")
-    if p.strip()
-]
+def _csv_env(name: str) -> list[str]:
+    return [s.strip() for s in os.environ.get(name, "").split(",") if s.strip()]
+
+
+# Slash commands and folders whose sessions are not captured (empty by default).
+EXCLUDED_COMMANDS: list[str] = _csv_env("CAPTURE_EXCLUDED_COMMANDS")
+EXCLUDED_PATHS: list[str] = _csv_env("CAPTURE_EXCLUDED_PATHS")
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
 # Plugin installs point this at ${CLAUDE_PLUGIN_DATA}/state (survives updates).
