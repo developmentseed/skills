@@ -61,7 +61,8 @@ _export_int_setting CAPTURE_TIMEOUT_SECONDS
 _export_int_setting CAPTURE_MAX_EST_TOKENS
 
 : "${CAPTURE_EXCLUDED_COMMANDS:=${CLAUDE_PLUGIN_OPTION_EXCLUDED_COMMANDS:-}}"
-export CAPTURE_EXCLUDED_COMMANDS
+: "${CAPTURE_EXCLUDED_PATHS:=${CLAUDE_PLUGIN_OPTION_EXCLUDED_PATHS:-}}"  # ~ expanded in curate.py
+export CAPTURE_EXCLUDED_COMMANDS CAPTURE_EXCLUDED_PATHS
 
 # Runtime state goes in the plugin data dir, which survives plugin updates.
 if [[ -n "${CLAUDE_PLUGIN_DATA:-}" ]]; then

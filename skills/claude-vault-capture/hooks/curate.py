@@ -38,6 +38,13 @@ EXCLUDED_COMMANDS: list[str] = [
     if c.strip()
 ]
 
+# Folders whose sessions are not captured (empty by default).
+EXCLUDED_PATHS: list[str] = [
+    p.strip()
+    for p in os.environ.get("CAPTURE_EXCLUDED_PATHS", "").split(",")
+    if p.strip()
+]
+
 REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
 # Plugin installs point this at ${CLAUDE_PLUGIN_DATA}/state (survives updates).
 STATE_DIR = pathlib.Path(
@@ -285,6 +292,101 @@ def uses_excluded_command(
     return False
 
 
+# An absolute or ~/ path in any tool input string (shell commands, Glob patterns,
+# MCP arguments), unless it is the tail of a longer word or path.
+_PATH_TOKEN_RE = re.compile(r"(?<![\w.~/-])(?:~/|/)[^\s'\"`;|&<>(){}\\,=\x00]+")
+_PATH_KEYS = ("file_path", "path", "notebook_path")
+
+
+def _strings(value):
+    """Every string in *value*, nested dicts and lists included."""
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, dict):
+        for v in value.values():
+            yield from _strings(v)
+    elif isinstance(value, list):
+        for v in value:
+            yield from _strings(v)
+
+
+def _path_forms(p: str) -> set[str]:
+    """*p* as written and as resolved, NFC-normalized and casefolded.
+
+    The literal form catches a symlink inside an excluded folder that points
+    elsewhere; realpath catches /tmp → /private/tmp and symlinked entries.
+    casefold because APFS is case-insensitive; on a case-sensitive disk that
+    only skips a capture.
+    """
+    literal = os.path.normpath(os.path.abspath(p))
+    try:
+        real = os.path.realpath(p)
+    except ValueError:  # an embedded NUL byte
+        real = literal
+    return {unicodedata.normalize("NFC", f).casefold() for f in (literal, real)}
+
+
+def uses_excluded_path(
+    messages: list[dict],
+    cwd: str,
+    excluded_paths: list[str] | None = None,
+) -> bool:
+    """True if the session (or one of its subagents) ran in, or named a path under,
+    an excluded folder in a tool call, or ran in a worktree of a repo inside one.
+
+    Over-excludes a session that merely mentions such a path in a tool input.
+    Misses paths built from variables, searches run over a parent folder, and
+    relative paths under other MCP keys.
+    """
+    entries = EXCLUDED_PATHS if excluded_paths is None else excluded_paths
+    if not entries:
+        return False
+    roots: list[pathlib.PurePosixPath] = []
+    for entry in entries:
+        expanded = os.path.expanduser(entry)
+        if not os.path.isabs(expanded):
+            # Fail closed: capturing a folder the user meant to exclude is worse.
+            now = datetime.datetime.now(datetime.timezone.utc)
+            print(
+                f"CAPTURE_BAD_SETTING\t{now:%Y-%m-%dT%H:%M:%SZ}\texcluded_paths entry "
+                f"{entry!r} is not an absolute path; skipping the session",
+                file=sys.stderr,
+            )
+            return True
+        roots += [pathlib.PurePosixPath(f) for f in _path_forms(expanded)]
+
+    def hit(p: str) -> bool:
+        return any(
+            pathlib.PurePosixPath(f).is_relative_to(r)
+            for f in _path_forms(p)
+            for r in roots
+        )
+
+    # The hook's cwd follows `cd`, so every message's cwd is checked.
+    cwds = list(dict.fromkeys(c for c in [cwd, *(m.get("cwd") for m in messages)] if c))
+    paths = set(cwds)
+    for m in messages:
+        for b in m.get("blocks") or []:
+            if not isinstance(b, dict) or b.get("type") != "tool_use":
+                continue
+            inp = b.get("input")
+            if not isinstance(inp, dict):
+                continue
+            for key in _PATH_KEYS:
+                v = inp.get(key)
+                if isinstance(v, str) and v:
+                    paths.add(os.path.join(m.get("cwd") or cwd, os.path.expanduser(v)))
+            for s in _strings(inp):
+                paths.update(os.path.expanduser(t) for t in _PATH_TOKEN_RE.findall(s))
+    if any(hit(p) for p in paths):
+        return True
+    for c in cwds:  # git only runs when nothing matched directly
+        root = _main_checkout(c)
+        if root is not None and hit(str(root)):
+            return True
+    return False
+
+
 # ── token guard ────────────────────────────────────────────────────────────────
 
 
@@ -303,11 +405,11 @@ def is_above_token_limit(text: str) -> bool:
 _GIT_ROOT_ARGS = ["--path-format=absolute", "--git-common-dir", "--show-toplevel"]
 
 
-def derive_project(cwd: str) -> str:
-    """Return the git repo's name (the main checkout's, even from a linked worktree).
+def _main_checkout(cwd: str) -> pathlib.Path | None:
+    """The git repo's main checkout dir, even from a linked worktree; None outside a repo.
 
     Starts from the nearest existing ancestor of *cwd*, since a worktree may be
-    removed before this backgrounded worker runs. 'home' outside any repo.
+    removed before this backgrounded worker runs.
     """
     path = pathlib.Path(cwd)
     while not path.is_dir() and path != path.parent:
@@ -320,13 +422,19 @@ def derive_project(cwd: str) -> str:
             timeout=5,
         )
     except Exception:
-        return "home"
+        return None
     if result.returncode != 0:
-        return "home"
+        return None
     common_dir, toplevel = result.stdout.splitlines()[:2]
     common = pathlib.Path(common_dir)
     # <repo>/.git for normal repos and worktrees; submodules keep theirs under .git/modules.
-    return common.parent.name if common.name == ".git" else pathlib.Path(toplevel).name
+    return common.parent if common.name == ".git" else pathlib.Path(toplevel)
+
+
+def derive_project(cwd: str) -> str:
+    """Return the git repo's name (the main checkout's); 'home' outside any repo."""
+    root = _main_checkout(cwd)
+    return root.name if root else "home"
 
 
 # ── log building ───────────────────────────────────────────────────────────────
@@ -906,9 +1014,10 @@ def run_capture(
     index_path: pathlib.Path | None = None,
     date_str: str | None = None,
     prompts_dir: pathlib.Path | None = None,
+    subagent_messages: list[dict] | None = None,
 ) -> None:
-    """Full capture pipeline: scrub → excluded/threshold/tokens on the new part →
-    API call → write → log."""
+    """Full capture pipeline: exclude → scrub → excluded/threshold/tokens on the new
+    part → API call → write → log. *subagent_messages* feed only the folder check."""
     import scrub as scrub_mod
 
     vault_dir = pathlib.Path(vault_dir or VAULT_DIR)
@@ -917,6 +1026,11 @@ def run_capture(
     prompts_dir = prompts_dir or REPO_ROOT / "prompts"
     if date_str is None:
         date_str = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
+
+    # ── 0. excluded folders: before rendering, so nothing is scrubbed or sent ─
+    if uses_excluded_path(transcript + (subagent_messages or []), cwd):
+        _log_skip(session_id, "excluded_path", {}, log_path=log_path)
+        return
 
     # A resumed session keeps its id: curate only what it added since the last capture.
     prior = last_capture(session_id, index_path=index_path)
@@ -1091,17 +1205,20 @@ def _load_transcript(transcript_path: str) -> list[dict]:
                         raw = obj.get("message", {}).get(
                             "content", obj.get("content", "")
                         )
-                        messages.append(
-                            {
-                                "role": role,
-                                "content": _extract_text(raw),  # what filters read
-                                "blocks": raw if isinstance(raw, list) else None,
-                                # end: byte offset past this line; the index records it
-                                # so a resumed session's next capture starts there
-                                # (message timestamps aren't in file order).
-                                "end": pos,
-                            }
-                        )
+                        msg = {
+                            "role": role,
+                            "content": _extract_text(raw),  # what filters read
+                            "blocks": raw if isinstance(raw, list) else None,
+                            # end: byte offset past this line; the index records it
+                            # so a resumed session's next capture starts there
+                            # (message timestamps aren't in file order).
+                            "end": pos,
+                        }
+                        # The hook's cwd follows `cd`, so uses_excluded_path
+                        # checks every one.
+                        if obj.get("cwd"):
+                            msg["cwd"] = obj["cwd"]
+                        messages.append(msg)
                         break
             except json.JSONDecodeError:
                 continue
@@ -1147,8 +1264,23 @@ def main():
             _log_best_effort("transcript_missing")
             sys.exit(0)
 
+        # Subagents' tool calls count for excluded_paths; they are never rendered.
+        subagent_messages: list[dict] = []
+        if EXCLUDED_PATHS:
+            stem = pathlib.Path(transcript_path).with_suffix("")
+            for p in sorted(stem.glob("subagents/*.jsonl")):
+                try:
+                    subagent_messages += _load_transcript(str(p))
+                except (OSError, ValueError):  # unreadable or not UTF-8: skip it
+                    continue
+
         try:
-            run_capture(transcript=transcript, session_id=session_id, cwd=cwd)
+            run_capture(
+                transcript=transcript,
+                session_id=session_id,
+                cwd=cwd,
+                subagent_messages=subagent_messages,
+            )
         except Exception as exc:
             _log_error(f"CURATE_ERROR session={session_id}: {exc}")
             _log_best_effort(f"error:{type(exc).__name__}")

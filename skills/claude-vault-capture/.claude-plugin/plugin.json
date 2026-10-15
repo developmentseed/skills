@@ -45,6 +45,11 @@
       "type": "string",
       "title": "Excluded slash commands",
       "description": "Comma-separated slash commands whose sessions are never captured, e.g. /daily-devlog,/weekly-recap. Matched when typed as a command (or at the start of a line), so mentions in prose don't count. Leave blank to capture every qualifying session."
+    },
+    "excluded_paths": {
+      "type": "string",
+      "title": "Excluded folders",
+      "description": "Comma-separated absolute folders (~/ is expanded) whose sessions are never captured, e.g. ~/code/client-x,~/Obsidian/vault/Private. A session is skipped if it, or one of its subagents, ran in one (or in a git worktree of a repo inside one), or named a path under one in a tool call (Read, Edit, Grep, Glob, shell commands, MCP). Covers everything below each folder, ignores case and follows symlinks; no wildcards, and a path containing a comma can't be listed. Not seen: paths built from shell variables, and searches over a parent folder that return files from inside one. An entry that isn't absolute skips every session until it is fixed. Leave blank to capture every qualifying session."
     }
   }
 }

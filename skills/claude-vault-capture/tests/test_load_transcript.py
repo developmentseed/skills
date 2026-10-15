@@ -89,6 +89,18 @@ class TestLoadTranscript:
             assert [m["content"] for m in msgs] == ["done"]
             assert msgs[-1]["end"] == len(done)
 
+    def test_cwd_is_kept_only_when_present(self, tmp_path):
+        path = self._write_jsonl(
+            tmp_path,
+            [
+                {"type": "user", "message": {"content": "a"}, "cwd": "/w/repo"},
+                {"type": "assistant", "message": {"content": "b"}},
+            ],
+        )
+        with_cwd, without = _load_transcript(path)
+        assert with_cwd["cwd"] == "/w/repo"
+        assert "cwd" not in without
+
     def test_list_content_blocks(self, tmp_path):
         path = self._write_jsonl(
             tmp_path,

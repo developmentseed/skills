@@ -64,6 +64,7 @@ Check the `skip_reason_a` from the log above:
 | `model_returned_null` | the model judged the session had no durable artifact — the single most common reason, and normal |
 | `duplicate` | the session was captured before (note, null, malformed, refused or truncated) and too little was added since. A resumed session's new part is curated on its own once it passes the same threshold (see [Resumed sessions](#resumed-sessions)). Sessions indexed before 0.4.0 are never re-curated. Timeouts and errors aren't recorded, so the next end retries |
 | `excluded_command` | a slash command in `excluded_commands` was used |
+| `excluded_path` | the session or a subagent ran in, or named a path under, a folder in `excluded_paths`; nothing was rendered, scrubbed or sent |
 | `token_limit` | transcript above `max_est_tokens` |
 | `timeout` | the model call exceeded `timeout_seconds` — raise it |
 | `malformed_json` | the model didn't return a usable artifact; transient unless it's every session |
@@ -79,7 +80,7 @@ Check the `skip_reason_a` from the log above:
 | `CAPTURE_TOKEN_FILE_PERMS` | `chmod 600` the credential file it names |
 | `CAPTURE_NOT_CONFIGURED` | set `vault_dir` |
 | `CAPTURE_VAULT_NOT_ABSOLUTE` | make `vault_dir` an absolute path (`~/…` is expanded) |
-| `CAPTURE_BAD_SETTING` | a numeric setting isn't a positive whole number; the default is used |
+| `CAPTURE_BAD_SETTING` | a numeric setting isn't a positive whole number; the default is used; an `excluded_paths` entry that isn't absolute skips every session until fixed |
 | `CAPTURE_NO_INTERPRETER` / `CAPTURE_NO_PYTHON3` | install `uv` / `python3` (see Prerequisites) |
 | `CAPTURE_HOOK_JSON_UNPARSED` | report it — the hook payload didn't parse |
 | `CAPTURE_SKIP_SCRIPTED` | nothing to fix: a `claude -p` or Agent SDK run, skipped by design |
@@ -100,10 +101,17 @@ Set via the plugin config prompt (`/plugin` → configure), or override with env
 | `oauth_token` / `CLAUDE_CODE_OAUTH_TOKEN` | — | Subscription auth; falls back to `~/.claude_vault_oauth_token`. |
 | `max_est_tokens` / `CAPTURE_MAX_EST_TOKENS` | `50000` | Token ceiling before skipping (~200 KB transcript). |
 | `excluded_commands` / `CAPTURE_EXCLUDED_COMMANDS` | — | Comma-separated slash commands whose sessions are not captured. |
+| `excluded_paths` / `CAPTURE_EXCLUDED_PATHS` | — | Comma-separated folders whose sessions are never captured; see [Excluding folders](#excluding-folders). |
 | `timeout_seconds` / `CAPTURE_TIMEOUT_SECONDS` | `30` | Hard wall on a single model call (in API mode, per attempt; overloads and 5xx errors are retried twice). Raise it for large sessions or slow links (subscription mode especially) — all model work is backgrounded, so a higher value never delays session close. |
 | `CAPTURE_STATE_DIR` | `${CLAUDE_PLUGIN_DATA}/state` | Where the dedup index and per-session log live. Set automatically for plugin installs. |
 | `CAPTURE_TOOL_CHARS_BUDGET` | `30000` | Character budget for the tool activity (commands, files touched) summarized alongside the conversation. |
 | `CAPTURE_SUCCESS_HEAD_CHARS` | `200` | How much of each successful tool result is kept when rendering that activity. |
+
+### Excluding folders
+
+`excluded_paths` takes absolute folders (`~/` is expanded), each covering everything below it, ignoring case and following symlinks. A session is skipped before anything is rendered, scrubbed or sent if it ran in one (also after a `cd`, or in a git worktree of a repo inside one), or if it or one of its subagents named a path under one in a tool call: Read, Edit, Grep, Glob, shell commands and MCP tools alike.
+
+It errs toward skipping: a tool input that merely mentions an excluded path drops the capture. It misses paths built from shell variables (`$VAULT/Private`), searches over a parent folder that return files from inside one, relative paths in MCP tools, and a worktree outside its repo that was removed before the capture ran. Excluding the whole vault skips every session that touches a note. A path containing a comma can't be listed.
 
 ### Subscription mode
 

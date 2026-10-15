@@ -46,6 +46,7 @@ def _build_plugin(home: pathlib.Path) -> pathlib.Path:
         'printf "SCRUB_FAILURES_PATH=%s\\n" "${SCRUB_FAILURES_PATH:-}" >> "$TMP"\n'
         'printf "CAPTURE_USE_SUBSCRIPTION=%s\\n" "${CAPTURE_USE_SUBSCRIPTION:-}" >> "$TMP"\n'
         'printf "CAPTURE_EXCLUDED_COMMANDS=%s\\n" "${CAPTURE_EXCLUDED_COMMANDS:-}" >> "$TMP"\n'
+        'printf "CAPTURE_EXCLUDED_PATHS=%s\\n" "${CAPTURE_EXCLUDED_PATHS:-}" >> "$TMP"\n'
         'if [ -z "${CAPTURE_MAX_EST_TOKENS+x}" ]; then\n'
         '  printf "CAPTURE_MAX_EST_TOKENS=UNSET\\n" >> "$TMP"\n'
         "else\n"
@@ -233,6 +234,20 @@ class TestMigratedSettings:
             "CAPTURE_EXCLUDED_COMMANDS=/daily-devlog,/weekly-recap"
             in invocation.read_text()
         )
+
+    def test_excluded_paths_maps_through_verbatim(self, tmp_path):
+        """No shell expansion: curate.py expands ~ and splits on commas."""
+        home = tmp_path / "home"
+        home.mkdir()
+        invocation = _build_plugin(home)
+
+        proc = _run_hook(
+            home, extra_env={"CLAUDE_PLUGIN_OPTION_EXCLUDED_PATHS": "~/a b,/x"}
+        )
+
+        assert proc.returncode == 0, proc.stderr
+        assert wait_for(invocation)
+        assert "CAPTURE_EXCLUDED_PATHS=~/a b,/x\n" in invocation.read_text()
 
     def test_max_est_tokens_maps_through(self, tmp_path):
         home = tmp_path / "home"
