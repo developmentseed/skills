@@ -51,19 +51,43 @@ class TestLoadTranscript:
         return str(p)
 
     def test_plain_string_content(self, tmp_path):
-        path = self._write_jsonl(
-            tmp_path,
-            [
-                {"type": "user", "message": {"content": "hello"}},
-                {"type": "assistant", "message": {"content": "world"}},
-            ],
-        )
-        msgs = _load_transcript(path)
-        # Plain-string content carries no raw blocks (blocks is None).
-        assert msgs == [
-            {"role": "user", "content": "hello", "blocks": None},
-            {"role": "assistant", "content": "world", "blocks": None},
+        rows = [
+            {"type": "user", "message": {"content": "hello"}},
+            {"type": "assistant", "message": {"content": "world"}},
         ]
+        path = self._write_jsonl(tmp_path, rows)
+        first, second = (len(json.dumps(r)) + 1 for r in rows)
+        msgs = _load_transcript(path)
+        # Plain-string content carries no raw blocks (blocks is None); end is the
+        # byte offset past each line.
+        assert msgs == [
+            {"role": "user", "content": "hello", "blocks": None, "end": first},
+            {
+                "role": "assistant",
+                "content": "world",
+                "blocks": None,
+                "end": first + second,
+            },
+        ]
+
+    def test_end_counts_bytes_not_chars(self, tmp_path):
+        p = tmp_path / "t.jsonl"
+        line = json.dumps(
+            {"type": "user", "message": {"content": "é"}}, ensure_ascii=False
+        )
+        p.write_text(line + "\n", encoding="utf-8")
+        assert _load_transcript(str(p))[0]["end"] == len(line.encode()) + 1
+
+    def test_unterminated_last_line_is_left_for_next_time(self, tmp_path):
+        """A line without its newline is still being written, even if it parses."""
+        done = json.dumps({"type": "user", "message": {"content": "done"}}) + "\n"
+        whole = json.dumps({"type": "assistant", "message": {"content": "whole"}})
+        for tail in (whole, whole[:-5]):
+            p = tmp_path / "t.jsonl"
+            p.write_text(done + tail)
+            msgs = _load_transcript(str(p))
+            assert [m["content"] for m in msgs] == ["done"]
+            assert msgs[-1]["end"] == len(done)
 
     def test_list_content_blocks(self, tmp_path):
         path = self._write_jsonl(

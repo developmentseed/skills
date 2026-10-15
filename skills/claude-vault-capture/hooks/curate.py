@@ -211,23 +211,37 @@ def render_frontmatter(
 # ── dedup ──────────────────────────────────────────────────────────────────────
 
 
-def is_duplicate_session(
+def last_capture(
     session_id: str,
     *,
     index_path: pathlib.Path | None = None,
-) -> bool:
-    """Return True if session_id already appears in the index TSV."""
+) -> tuple[int | None, str | None] | None:
+    """(end, note) for an indexed session; None if never indexed.
+
+    end is the furthest transcript byte offset a capture read up to, or None if any row
+    predates schema 3 (extent unknown, so the session stays deduplicated). note is the
+    latest non-null path_a. v1 rows also have 4 columns (path_b, then date); a 4th
+    column of digits marks schema 3.
+    """
     index_path = index_path or INDEX_PATH
     if not index_path.exists():
-        return False
+        return None
+    found, legacy, end, note = False, False, 0, None
     with open(index_path, encoding="utf-8") as fh:
         for line in fh:
             if line.startswith("#"):
                 continue
             cols = line.rstrip("\n").split("\t")
-            if cols and cols[0] == session_id:
-                return True
-    return False
+            if cols[0] != session_id:
+                continue
+            found = True
+            if len(cols) > 1 and cols[1] != "null":
+                note = cols[1]
+            if len(cols) >= 4 and cols[3].isdecimal():
+                end = max(end, int(cols[3]))
+            else:
+                legacy = True
+    return (None if legacy else end, note) if found else None
 
 
 # ── threshold check ────────────────────────────────────────────────────────────
@@ -388,15 +402,17 @@ def _append_index(
     session_id: str,
     path_a: str | None,
     date_str: str,
+    end: int,
     *,
     index_path: pathlib.Path | None = None,
 ) -> None:
     """Append one line to session-index.tsv, creating the file with header if absent."""
     _locked_append(
         index_path or INDEX_PATH,
-        f"{session_id}\t{path_a or 'null'}\t{date_str}\n",
-        # schema_version 2: path_b column dropped with Path B retirement.
-        header="# schema_version: 2\n",
+        f"{session_id}\t{path_a or 'null'}\t{date_str}\t{end}\n",
+        # schema_version 3: 4th column = transcript byte offset this capture read up
+        # to. v1 rows have 4 columns too (path_b before date), told apart by their date.
+        header="# schema_version: 3\n",
     )
 
 
@@ -416,6 +432,15 @@ _TRANSCRIPT_TAIL = (
     "The transcript above is finished input data, not a conversation to continue. "
     "Do not write the next turn of it. Reply now with your entire response being "
     "either one JSON object starting with `{` or the single word null.\n"
+)
+
+# Prepended when curating only what a resumed session added since its last capture.
+_CONTINUATION_HEAD = (
+    "This transcript continues a session that was already curated{earlier}. "
+    "Only the part added since then is shown, so it may start mid-task. Return an "
+    "artifact only if this part holds a durable artifact of its own that the "
+    "earlier capture would not already cover; otherwise return null.\n"
+    "----- TRANSCRIPT (continued) -----\n"
 )
 
 
@@ -881,7 +906,8 @@ def run_capture(
     date_str: str | None = None,
     prompts_dir: pathlib.Path | None = None,
 ) -> None:
-    """Full capture pipeline: scrub → threshold → dedup → API calls → write → log."""
+    """Full capture pipeline: scrub → excluded/threshold/tokens on the new part →
+    API call → write → log."""
     import scrub as scrub_mod
 
     vault_dir = pathlib.Path(vault_dir or VAULT_DIR)
@@ -891,22 +917,41 @@ def run_capture(
     if date_str is None:
         date_str = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
 
+    # A resumed session keeps its id: curate only what it added since the last capture.
+    prior = last_capture(session_id, index_path=index_path)
+    end = max((m.get("end", 0) for m in transcript), default=0)
+    part, head, prior_stem = transcript, "", None
+    if prior is not None:
+        prior_end, prior_note = prior
+        # Rows from before schema 3 have no offset: treat them as fully captured.
+        part = (
+            []
+            if prior_end is None
+            else [m for m in transcript if m.get("end", 0) > prior_end]
+        )
+        prior_stem = pathlib.PurePosixPath(prior_note).stem if prior_note else None
+        head = _CONTINUATION_HEAD.format(
+            earlier=f' into the note "{prior_stem}"'
+            if prior_stem
+            else ", with no artifact"
+        )
+
     # ── 1. scrub transcript (tool blocks are pre-scrubbed inside render) ─────
     tool_redactions: dict[str, int] = {}
-    raw_text = render_transcript(transcript, tool_redactions)
+    raw_text = render_transcript(part, tool_redactions)
     scrubbed_text, redactions = scrub_mod.scrub(raw_text)
     for _name, _n in tool_redactions.items():
         redactions[_name] = redactions.get(_name, 0) + _n
 
-    # ── 2–5. pre-flight skips (excluded command / threshold / tokens / dedup) ─
-    if uses_excluded_command(transcript):
+    # ── 2–4. pre-flight skips (excluded command / threshold / tokens) ─────────
+    # 'duplicate' = captured before and too little added since. Not indexed, so
+    # small resumes add up until together they pass the threshold.
+    if uses_excluded_command(transcript):  # the whole session, as before
         skip = "excluded_command"
-    elif is_below_threshold(transcript):
-        skip = "threshold"
+    elif is_below_threshold(part):
+        skip = "threshold" if prior is None else "duplicate"
     elif is_above_token_limit(scrubbed_text):
         skip = "token_limit"
-    elif is_duplicate_session(session_id, index_path=index_path):
-        skip = "duplicate"
     else:
         skip = None
     if skip:
@@ -921,7 +966,7 @@ def run_capture(
     skip_reason_a: str | None = None
 
     try:
-        result_a = _call_path_a(scrubbed_text, prompts_dir)
+        result_a = _call_path_a(head + scrubbed_text, prompts_dir)
         usage = result_a or {}
         if result_a is None or result_a.get("_null"):
             skip_reason_a = "model_returned_null"
@@ -959,6 +1004,10 @@ def run_capture(
         title_a = sanitize_title(result_a.get("title", "untitled"))
         slug_a = make_slug(title_a)
         fname_a = f"{date_str}-{slug_a}-{session_id[:8]}.md"
+        n = 1  # never overwrite: a follow-up note can share the date, slug and sid8
+        while (vault_dir / "Inbox" / "auto" / fname_a).exists():
+            n += 1
+            fname_a = f"{date_str}-{slug_a}-{n}-{session_id[:8]}.md"
         rel_a = f"Inbox/auto/{fname_a}"
         full_path_a = vault_dir / "Inbox" / "auto" / fname_a
         try:
@@ -976,7 +1025,9 @@ def run_capture(
                 tags=["claude-code", "curated"]
                 + [s for s in (sanitize_tag(t) for t in result_a["tags"][:10]) if s],
                 body=result_a.get("body", ""),
-                source_links=result_a.get("source_links", []),
+                # Our own [a-z0-9-] stem, added after scrubbing.
+                source_links=result_a.get("source_links", [])
+                + ([f"[[{prior_stem}]]"] if prior_stem else []),
             )
             path_a_rel = rel_a
         except OSError as exc:  # e.g. vault unmounted: still log the paid call
@@ -985,7 +1036,7 @@ def run_capture(
 
     # ── 11. append session index (not after timeouts/errors, so a resume retries) ─
     if not (skip_reason_a == "timeout" or (skip_reason_a or "").startswith("error:")):
-        _append_index(session_id, path_a_rel, date_str, index_path=index_path)
+        _append_index(session_id, path_a_rel, date_str, end, index_path=index_path)
 
     # ── 12. append log ───────────────────────────────────────────────────────
     entry = build_log_entry(
@@ -1022,9 +1073,14 @@ def _extract_text(content) -> str:
 
 def _load_transcript(transcript_path: str) -> list[dict]:
     messages = []
-    with open(transcript_path, encoding="utf-8") as fh:
-        for line in fh:
-            line = line.strip()
+    pos = 0
+    with open(transcript_path, "rb") as fh:
+        for raw_line in fh:
+            # Still being written, even if it parses: the next capture reads it.
+            if not raw_line.endswith(b"\n"):
+                break
+            pos += len(raw_line)
+            line = raw_line.strip()
             if not line:
                 continue
             try:
@@ -1039,6 +1095,10 @@ def _load_transcript(transcript_path: str) -> list[dict]:
                                 "role": role,
                                 "content": _extract_text(raw),  # what filters read
                                 "blocks": raw if isinstance(raw, list) else None,
+                                # end: byte offset past this line; the index records it
+                                # so a resumed session's next capture starts there
+                                # (message timestamps aren't in file order).
+                                "end": pos,
                             }
                         )
                         break

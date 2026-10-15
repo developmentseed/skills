@@ -218,9 +218,12 @@ class TestEdgeCaseSkips:
         assert _no_files(temp_vault)
         assert entries[0]["skip_reason_a"] == "token_limit"
 
-    def test_duplicate_session(self, run_main, mock_from_responses, temp_vault):
+    def test_duplicate_session(
+        self, run_main, mock_from_responses, temp_vault, monkeypatch
+    ):
         """Second capture of the same session_id writes nothing new and logs duplicate."""
         mock_from_responses("adr-worthy")
+        calls = _record(monkeypatch)
         sid = "dup00112233aabbccdd09"
         run_main(_transcript("adr-worthy"), sid, "/tmp")
         auto_after_first = list((temp_vault.vault_dir / "Inbox" / "auto").glob("*.md"))
@@ -230,6 +233,196 @@ class TestEdgeCaseSkips:
         # still exactly one file per path — no second artifact
         assert len(list((temp_vault.vault_dir / "Inbox" / "auto").glob("*.md"))) == 1
         assert entries[-1]["skip_reason_a"] == "duplicate"
+        assert len(calls) == 1
+
+
+def _record(monkeypatch, calls: list[str] | None = None) -> list[str]:
+    """Wrap the installed _call_path_a so each call's input text is recorded."""
+    import curate
+
+    calls = [] if calls is None else calls
+    inner = curate._call_path_a
+
+    def _wrapped(text, *args, **kwargs):
+        calls.append(text)
+        return inner(text, *args, **kwargs)
+
+    monkeypatch.setattr(curate, "_call_path_a", _wrapped)
+    return calls
+
+
+def _notes(temp_vault) -> list[pathlib.Path]:
+    return sorted((temp_vault.vault_dir / "Inbox" / "auto").glob("*.md"))
+
+
+def _index_rows(temp_vault, sid: str) -> list[list[str]]:
+    lines = temp_vault.index_path.read_text().splitlines()
+    return [ln.split("\t") for ln in lines if ln.startswith(sid + "\t")]
+
+
+class TestResumedSessions:
+    """A resumed session keeps its id; only what it added since is curated."""
+
+    SID = "ae5e0011223344556677"
+
+    @pytest.fixture
+    def session(self, tmp_path) -> pathlib.Path:
+        copy = tmp_path / "resumed.jsonl"
+        copy.write_bytes(_transcript("adr-worthy").read_bytes())
+        return copy
+
+    @staticmethod
+    def _resume(path: pathlib.Path) -> None:
+        """Append the fixture again: a resume that adds a whole session's worth."""
+        with open(path, "ab") as fh:
+            fh.write(_transcript("adr-worthy").read_bytes())
+
+    def test_resumed_session_curates_only_new_part(
+        self, run_main, mock_from_responses, temp_vault, monkeypatch, session
+    ):
+        import curate
+
+        mock_from_responses("adr-worthy")
+        run_main(session, self.SID, "/tmp")
+        (first,) = _notes(temp_vault)
+        self._resume(session)
+        mock_from_responses("malformed-title")
+        calls = _record(monkeypatch)
+
+        entries = run_main(session, self.SID, "/tmp")
+
+        assert entries[-1]["skip_reason_a"] is None
+        notes = _notes(temp_vault)
+        assert len(notes) == 2
+        second = next(n for n in notes if n != first)
+        assert f"[[{first.stem}]]" in second.read_text().split("## Source", 1)[1]
+        (text,) = calls
+        assert text.startswith("This transcript continues a session")
+        assert first.stem in text.split("\n", 1)[0]
+        full = curate.render_transcript(curate._load_transcript(str(session)))
+        assert len(text) < len(full)
+        rows = _index_rows(temp_vault, self.SID)
+        assert len(rows) == 2
+        assert rows[1][3] == str(session.stat().st_size)
+
+    def test_small_resume_is_duplicate(
+        self, run_main, mock_from_responses, temp_vault, monkeypatch, session
+    ):
+        mock_from_responses("adr-worthy")
+        calls = _record(monkeypatch)
+        run_main(session, self.SID, "/tmp")
+        with open(session, "a") as fh:
+            fh.write(json.dumps({"type": "user", "message": {"content": "thanks"}}))
+            fh.write(
+                "\n" + json.dumps({"type": "assistant", "message": {"content": "ok"}})
+            )
+            fh.write("\n")
+
+        entries = run_main(session, self.SID, "/tmp")
+
+        assert entries[-1]["skip_reason_a"] == "duplicate"
+        assert len(calls) == 1
+        assert len(_index_rows(temp_vault, self.SID)) == 1
+
+    @pytest.mark.parametrize(
+        "row",
+        ["{sid}\tInbox/auto/f.md\t2026-09-01", "{sid}\tnull\tnull\t2026-04-23"],
+        ids=["v2", "v1"],
+    )
+    def test_legacy_index_rows_stay_duplicate(
+        self, run_main, mock_from_responses, temp_vault, monkeypatch, row
+    ):
+        """Sessions indexed before byte offsets are never re-curated."""
+        temp_vault.index_path.write_text(
+            "# schema_version: 2\n" + row.format(sid=self.SID) + "\n"
+        )
+        mock_from_responses("adr-worthy")
+        calls = _record(monkeypatch)
+
+        entries = run_main(_transcript("adr-worthy"), self.SID, "/tmp")
+
+        assert entries[-1]["skip_reason_a"] == "duplicate"
+        assert calls == []
+
+    def test_continuation_after_null(
+        self, run_main, mock_from_responses, temp_vault, monkeypatch, session
+    ):
+        mock_from_responses("debugging-only")
+        run_main(session, self.SID, "/tmp")
+        assert _notes(temp_vault) == []
+        self._resume(session)
+        mock_from_responses("adr-worthy")
+        calls = _record(monkeypatch)
+
+        run_main(session, self.SID, "/tmp")
+
+        assert ", with no artifact" in calls[0].split("\n", 1)[0]
+        (note,) = _notes(temp_vault)
+        assert "[[" not in note.read_text().partition("## Source")[2]
+
+    def test_continuation_timeout_retries(
+        self, run_main, mock_from_responses, temp_vault, monkeypatch, session
+    ):
+        import curate
+
+        mock_from_responses("adr-worthy")
+        run_main(session, self.SID, "/tmp")
+        self._resume(session)
+        calls: list[str] = []
+
+        def _slow(*a, **kw):
+            raise TimeoutError("slow")
+
+        monkeypatch.setattr(curate, "_call_path_a", _slow)
+        _record(monkeypatch, calls)
+        entries = run_main(session, self.SID, "/tmp")
+        assert entries[-1]["skip_reason_a"] == "timeout"
+        assert len(_index_rows(temp_vault, self.SID)) == 1
+
+        mock_from_responses("malformed-title")
+        _record(monkeypatch, calls)
+        entries = run_main(session, self.SID, "/tmp")
+
+        assert entries[-1]["skip_reason_a"] is None
+        assert len(calls) == 2 and calls[1] == calls[0]
+
+    def test_ceiling_applies_to_new_part(
+        self, run_main, mock_from_responses, temp_vault, monkeypatch, session
+    ):
+        """A long resumed session isn't blocked by its own already-captured history."""
+        import curate
+
+        mock_from_responses("adr-worthy")
+        run_main(session, self.SID, "/tmp")
+        part = len(curate.render_transcript(curate._load_transcript(str(session))))
+        self._resume(session)
+        full = len(curate.render_transcript(curate._load_transcript(str(session))))
+        monkeypatch.setenv("CAPTURE_MAX_EST_TOKENS", str((part + full) // 8))
+        mock_from_responses("malformed-title")
+
+        entries = run_main(session, self.SID, "/tmp")
+
+        assert entries[-1]["skip_reason_a"] is None
+        assert len(_notes(temp_vault)) == 2
+
+    def test_same_day_same_slug_does_not_overwrite(
+        self, run_main, mock_from_responses, temp_vault, session
+    ):
+        mock_from_responses("adr-worthy")
+        run_main(session, self.SID, "/tmp")
+        (first,) = _notes(temp_vault)
+        first_bytes = first.read_bytes()
+        self._resume(session)
+
+        run_main(session, self.SID, "/tmp")
+
+        notes = _notes(temp_vault)
+        assert len(notes) == 2
+        assert first.read_bytes() == first_bytes
+        sid8 = self.SID[:8]
+        expected = first.name.replace(f"-{sid8}.md", f"-2-{sid8}.md")
+        assert {n.name for n in notes} == {first.name, expected}
+        assert all(FILENAME_RE.match(n.name) for n in notes)
 
 
 class TestCredentialGuards:

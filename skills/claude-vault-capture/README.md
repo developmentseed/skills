@@ -10,7 +10,7 @@ Nothing runs synchronously on session close (the hook returns in well under 200 
 
 ## What you get
 
-- **Automatic capture** — a `SessionEnd` hook curates one durable artifact per qualifying session (a decision, runbook, gotcha, or spec — or nothing, if the session was low-signal) into `<vault>/Inbox/auto/`, using Sonnet. The curator sees the tool activity too — commands run, files touched, and error output — not just the conversation, so notes capture what actually happened rather than only what was said about it.
+- **Automatic capture** — a `SessionEnd` hook curates one durable artifact per qualifying session (a decision, runbook, gotcha, or spec — or nothing, if the session was low-signal) into `<vault>/Inbox/auto/`, using Sonnet, and one more each time a resumed session adds enough new work. The curator sees the tool activity too — commands run, files touched, and error output — not just the conversation, so notes capture what actually happened rather than only what was said about it.
 - **`/vault-save` skill** — on-demand export of a Claude-generated document (spec, plan, ADR, runbook, note) to `<vault>/claude-docs/` with structured frontmatter, mid-session. Auto-triggers on phrases like "save this to my vault".
 
 ## Prerequisites
@@ -62,7 +62,7 @@ Check the `skip_reason_a` from the log above:
 |---|---|
 | `threshold` | a very short session: fewer than 3 user-side messages (tool results count) or under 1500 chars of user-side text (your prompts plus injected skill text) — working as intended |
 | `model_returned_null` | the model judged the session had no durable artifact — the single most common reason, and normal |
-| `duplicate` | that session already reached the model (captured, null, malformed, refused or truncated). Timeouts and errors aren't recorded, so a resumed session retries |
+| `duplicate` | the session was captured before (note, null, malformed, refused or truncated) and too little was added since. A resumed session's new part is curated on its own once it passes the same threshold (see [Resumed sessions](#resumed-sessions)). Sessions indexed before 0.4.0 are never re-curated. Timeouts and errors aren't recorded, so the next end retries |
 | `excluded_command` | a slash command in `excluded_commands` was used |
 | `token_limit` | transcript above `max_est_tokens` |
 | `timeout` | the model call exceeded `timeout_seconds` — raise it |
@@ -83,6 +83,10 @@ Check the `skip_reason_a` from the log above:
 | `CAPTURE_NO_INTERPRETER` / `CAPTURE_NO_PYTHON3` | install `uv` / `python3` (see Prerequisites) |
 | `CAPTURE_HOOK_JSON_UNPARSED` | report it — the hook payload didn't parse |
 | `CAPTURE_SKIP_SCRIPTED` | nothing to fix: a `claude -p` or Agent SDK run, skipped by design |
+
+### Resumed sessions
+
+`claude --resume` and `--continue` keep the session id and append to the same transcript. Each capture records how far into the transcript it read, and the next `SessionEnd` curates only what was added since, against the same threshold and token ceiling, into a follow-up note whose `## Source` links the earlier note. A follow-up that only repeats the earlier capture comes back null. `/branch` and `--fork-session` get a new id and are curated in full, copied history included. Known limits: a session whose transcript is over `max_est_tokens` is never indexed, so its later work is skipped too; and after a compaction, the summary in the new part can restate earlier work.
 
 ## Configuration
 
@@ -128,8 +132,8 @@ The curation run drops the credentials and provider settings it inherits from yo
 
 This is a capture *engine*. Triaging captured artifacts into structured vault folders (promoting, backlinking, rollups) is intentionally out of scope. An extension consumes:
 
-- **`Inbox/auto/`** — curated artifacts. Filenames: `YYYY-MM-DD-<slug>-<sid8>.md`. Frontmatter includes `session_id`, `created`, `source`, `type`, and `tags`.
-- **`${CLAUDE_PLUGIN_DATA}/state/`** — read-only runtime state: `session-index.tsv` (dedup) and `log.md` (per-session JSON-lines: skip reasons, costs, token counts).
+- **`Inbox/auto/`** — curated artifacts. Filenames: `YYYY-MM-DD-<slug>-<sid8>.md`, or `YYYY-MM-DD-<slug>-<n>-<sid8>.md` when that name is taken. One session can have several notes (see [Resumed sessions](#resumed-sessions)). Frontmatter includes `session_id`, `created`, `source`, `type`, and `tags`.
+- **`${CLAUDE_PLUGIN_DATA}/state/`** — read-only runtime state: `session-index.tsv` (dedup) and `log.md` (per-session JSON-lines: skip reasons, costs, token counts). `session-index.tsv` columns are `session_id`, `path_a`, `date`, `transcript_end` (schema 3); older rows have 3 columns (v2), or 4 with `path_b` before the date (v1).
 
 To stop the pipeline from archiving an extension's own workflow sessions, set `CAPTURE_EXCLUDED_COMMANDS`.
 
