@@ -836,12 +836,16 @@ def _estimate_cost_a(tokens_in: int, tokens_out: int) -> float:
 # ── file writing ───────────────────────────────────────────────────────────────
 
 # Obsidian loads embeds when a note is shown, so a URL steered into the note by
-# transcript content (a fetched page, an email) would be requested. Images with a
-# scheme or //host target, and reference-style ones, become links; local and
-# ![[wikilink]] embeds stay. HTML media tags are entity-escaped, which also holds
-# inside HTML blocks. Code blocks too: a regex can't tell fences from HTML blocks.
-_IMAGE_BANG_RE = re.compile(r"!(?=\[(?!\[))")
+# transcript content (a fetched page, an email) would be requested. Inline images
+# with a scheme or //host target, and reference images whose [label]: is defined,
+# become links; local and ![[wikilink]] embeds stay, and so does an undefined
+# reference, which renders as text (e.g. JS `![a, b].includes(x)`). HTML media
+# tags are entity-escaped, which also holds inside HTML blocks. Code blocks too:
+# a regex can't tell fences from HTML blocks.
+# Groups: 1 label, 2 "(" for an inline image, 3 the [ref] of a full/collapsed one.
+_IMAGE_BANG_RE = re.compile(r"!(?=\[(?!\[)([^\]\n]*)\](?:(\()|\[([^\]\n]*)\])?)")
 _LOCAL_IMAGE_RE = re.compile(r"\[[^\]\n]*\]\(\s*+<?+(?![A-Za-z][A-Za-z0-9+.\-]*:|//)")
+_REF_DEF_RE = re.compile(r"^ {0,3}\[([^\]\n]+)\]:", re.MULTILINE)
 _HTML_MEDIA_RE = re.compile(
     r"<(?=/?(?:img|image|iframe|frame|video|audio|source|track|embed|object"
     r"|picture|svg|input|link)(?![\w-]))",
@@ -849,12 +853,21 @@ _HTML_MEDIA_RE = re.compile(
 )
 
 
+def _ref_key(label: str) -> str:
+    """Reference labels match case-insensitively, whitespace collapsed."""
+    return " ".join(label.split()).casefold()
+
+
 def neutralize_remote_embeds(md: str) -> str:
     """Turn remote image embeds into links and escape HTML media tags."""
-    md = _IMAGE_BANG_RE.sub(
-        lambda m: "!" if _LOCAL_IMAGE_RE.match(md, m.end()) else "", md
-    )
-    return _HTML_MEDIA_RE.sub("&lt;", md)
+    defs = {_ref_key(d) for d in _REF_DEF_RE.findall(md)}
+
+    def _bang(m: re.Match) -> str:
+        if m[2]:  # inline
+            return "!" if _LOCAL_IMAGE_RE.match(md, m.end()) else ""
+        return "" if _ref_key(m[3] or m[1]) in defs else "!"
+
+    return _HTML_MEDIA_RE.sub("&lt;", _IMAGE_BANG_RE.sub(_bang, md))
 
 
 def _write_artifact(

@@ -20,7 +20,14 @@ import curate
             "![a][ref]\n\n[ref]: https://x.example/a.png",
             "[a][ref]\n\n[ref]: https://x.example/a.png",
         ),
-        ("![shortcut]", "[shortcut]"),
+        (
+            "![Short  Cut]\n\n[short cut]: https://x.example/a.png",
+            "[Short  Cut]\n\n[short cut]: https://x.example/a.png",
+        ),
+        (
+            "![a][]\n\n[a]: https://x.example/a.png",
+            "[a][]\n\n[a]: https://x.example/a.png",
+        ),
         (
             '<img src="https://x.example/a.png">',
             '&lt;img src="https://x.example/a.png">',
@@ -54,6 +61,8 @@ def test_remote_embeds_are_neutralized(text, expected):
         "[a link](https://x.example), not an embed",
         "if a < b and Vec<u8> and <details> and <imgur>",
         "Wow! [x](https://x.example)",
+        "if (![a, b].includes(x)) return;",  # undefined references render as text
+        "![shortcut] and ![a][missing]",
     ],
 )
 def test_local_embeds_links_and_code_survive(text):
