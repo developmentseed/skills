@@ -696,6 +696,27 @@ def _estimate_cost_a(tokens_in: int, tokens_out: int) -> float:
 
 # ── file writing ───────────────────────────────────────────────────────────────
 
+# Obsidian loads embeds when a note is shown, so a URL steered into the note by
+# transcript content (a fetched page, an email) would be requested. Images with a
+# scheme or //host target, and reference-style ones, become links; local and
+# ![[wikilink]] embeds stay. HTML media tags are entity-escaped, which also holds
+# inside HTML blocks. Code blocks too: a regex can't tell fences from HTML blocks.
+_IMAGE_BANG_RE = re.compile(r"!(?=\[(?!\[))")
+_LOCAL_IMAGE_RE = re.compile(r"\[[^\]\n]*\]\(\s*+<?+(?![A-Za-z][A-Za-z0-9+.\-]*:|//)")
+_HTML_MEDIA_RE = re.compile(
+    r"<(?=/?(?:img|image|iframe|frame|video|audio|source|track|embed|object"
+    r"|picture|svg|input|link)(?![\w-]))",
+    re.IGNORECASE,
+)
+
+
+def neutralize_remote_embeds(md: str) -> str:
+    """Turn remote image embeds into links and escape HTML media tags."""
+    md = _IMAGE_BANG_RE.sub(
+        lambda m: "!" if _LOCAL_IMAGE_RE.match(md, m.end()) else "", md
+    )
+    return _HTML_MEDIA_RE.sub("&lt;", md)
+
 
 def _write_artifact(
     path: pathlib.Path, *, body: str, source_links: list[str], **fm
@@ -707,9 +728,8 @@ def _write_artifact(
             "\n## Source\n" + "\n".join(f"- {link}" for link in source_links) + "\n"
         )
 
-    content = (
-        f"{render_frontmatter(**fm)}\n# {sanitize_title(fm['title'])}\n"
-        f"{body}\n{source_section}"
+    content = render_frontmatter(**fm) + neutralize_remote_embeds(
+        f"\n# {sanitize_title(fm['title'])}\n{body}\n{source_section}"
     )
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content, encoding="utf-8")

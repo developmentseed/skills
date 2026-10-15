@@ -132,7 +132,7 @@ This is a capture *engine*. Triaging captured artifacts into structured vault fo
 
 To stop the pipeline from archiving an extension's own workflow sessions, set `CAPTURE_EXCLUDED_COMMANDS`.
 
-Notes contain model-written text. If you use Templater's "trigger on new file creation", exclude `Inbox/auto/` there, or any `<% %>` in a note runs as a template.
+Notes contain model-written text. If you use Templater's "trigger on new file creation", exclude `Inbox/auto/` there, or any `<% %>` in a note runs as a template. Remote image embeds and HTML media tags in a note are turned into plain links and text before it is written, so opening a note never fetches a URL the transcript chose.
 
 ## Turning it off
 
