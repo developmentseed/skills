@@ -549,6 +549,10 @@ def _invoke_via_subscription(
             "CLAUDE_CODE_EXTRA_BODY": json.dumps(
                 {"thinking": {"type": "between_tools"}}
             ),
+            # Don't save the run as a session: each transcript would hold a scrubbed
+            # copy of the captured session for every transcript reader to find.
+            # (--no-session-persistence is print-mode only; this works in any mode.)
+            "CLAUDE_CODE_SKIP_PROMPT_HISTORY": "1",
         },
     )
 

@@ -162,6 +162,13 @@ def test_run_is_isolated_like_api_mode(monkeypatch):
     assert kw["env"]["CLAUDE_CODE_MAX_OUTPUT_TOKENS"] == str(curate.MAX_TOKENS_A)
 
 
+def test_curation_run_is_not_saved_as_a_session(monkeypatch):
+    """Each saved run would be a ~170 KB transcript holding the scrubbed session."""
+    _install_fake_sdk(monkeypatch, [_AssistantMessage(content=[_TextBlock("null")])])
+    curate._invoke_via_subscription("claude-sonnet-5-5", "system", "transcript")
+    assert _CapturedOptions.last_kwargs["env"]["CLAUDE_CODE_SKIP_PROMPT_HISTORY"] == "1"
+
+
 def test_assistant_error_is_raised_not_parsed_as_a_reply(monkeypatch):
     login = _TextBlock("Invalid API key · Please run /login")
     _install_fake_sdk(
