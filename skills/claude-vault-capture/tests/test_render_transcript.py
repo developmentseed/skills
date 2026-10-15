@@ -195,7 +195,7 @@ class TestReachesCuratorScrubbed:
     ):
         captured = {}
 
-        def _spy(scrubbed_text, prompts_dir):
+        def _spy(scrubbed_text, prompts_dir, note=""):
             captured["text"] = scrubbed_text
             return None  # model_returned_null → no file write needed
 

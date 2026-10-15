@@ -236,15 +236,15 @@ class TestEdgeCaseSkips:
         assert len(calls) == 1
 
 
-def _record(monkeypatch, calls: list[str] | None = None) -> list[str]:
-    """Wrap the installed _call_path_a so each call's input text is recorded."""
+def _record(monkeypatch, calls: list | None = None) -> list[tuple[str, str]]:
+    """Wrap the installed _call_path_a so each call's (text, note) is recorded."""
     import curate
 
     calls = [] if calls is None else calls
     inner = curate._call_path_a
 
     def _wrapped(text, *args, **kwargs):
-        calls.append(text)
+        calls.append((text, kwargs.get("note", "")))
         return inner(text, *args, **kwargs)
 
     monkeypatch.setattr(curate, "_call_path_a", _wrapped)
@@ -296,9 +296,11 @@ class TestResumedSessions:
         assert len(notes) == 2
         second = next(n for n in notes if n != first)
         assert f"[[{first.stem}]]" in second.read_text().split("## Source", 1)[1]
-        (text,) = calls
-        assert text.startswith("This transcript continues a session")
-        assert first.stem in text.split("\n", 1)[0]
+        ((text, note),) = calls
+        # The instruction rides in the system prompt; the transcript stays data.
+        assert "This transcript continues a session" in note
+        assert first.stem in note
+        assert "continues a session" not in text
         full = curate.render_transcript(curate._load_transcript(str(session)))
         assert len(text) < len(full)
         rows = _index_rows(temp_vault, self.SID)
@@ -356,7 +358,7 @@ class TestResumedSessions:
 
         run_main(session, self.SID, "/tmp")
 
-        assert ", with no artifact" in calls[0].split("\n", 1)[0]
+        assert ", with no artifact" in calls[0][1]
         (note,) = _notes(temp_vault)
         assert "[[" not in note.read_text().partition("## Source")[2]
 
@@ -368,7 +370,7 @@ class TestResumedSessions:
         mock_from_responses("adr-worthy")
         run_main(session, self.SID, "/tmp")
         self._resume(session)
-        calls: list[str] = []
+        calls: list[tuple[str, str]] = []
 
         def _slow(*a, **kw):
             raise TimeoutError("slow")

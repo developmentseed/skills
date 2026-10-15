@@ -21,6 +21,20 @@ def _single(text):
     return _fake
 
 
+def test_note_goes_to_the_system_prompt_not_the_transcript(monkeypatch):
+    """Subscription mode calls everything after its directive pure input data."""
+    seen = {}
+
+    def _fake(model, max_tokens, system_prompt, user_text):
+        seen.update(system=system_prompt, user=user_text)
+        return ("null", 10, 1)
+
+    monkeypatch.setattr(curate, "_invoke_model", _fake)
+    curate._call_path_a("TRANSCRIPT", PROMPTS, note="\n\nCONTINUATION NOTE")
+    assert seen["system"].endswith("CONTINUATION NOTE")
+    assert seen["user"] == "TRANSCRIPT"
+
+
 def test_delimiter_echo_around_json_is_salvaged(monkeypatch):
     artifact = {"title": "T", "type": "gotcha", "body": "B"}
     text = "----- END TRANSCRIPT -----\n\n" + json.dumps(artifact)

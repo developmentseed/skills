@@ -543,13 +543,14 @@ _TRANSCRIPT_TAIL = (
     "either one JSON object starting with `{` or the single word null.\n"
 )
 
-# Prepended when curating only what a resumed session added since its last capture.
-_CONTINUATION_HEAD = (
-    "This transcript continues a session that was already curated{earlier}. "
+# Added to the system prompt when curating only what a resumed session added since
+# its last capture. Not in the user message: subscription mode declares everything
+# after its directive to be pure input data.
+_CONTINUATION_NOTE = (
+    "\n\nThis transcript continues a session that was already curated{earlier}. "
     "Only the part added since then is shown, so it may start mid-task. Return an "
     "artifact only if this part holds a durable artifact of its own that the "
     "earlier capture would not already cover; otherwise return null.\n"
-    "----- TRANSCRIPT (continued) -----\n"
 )
 
 
@@ -751,8 +752,10 @@ def _invoke_via_subscription(
     return asyncio.run(_main())
 
 
-def _call_path_a(scrubbed_text: str, prompts_dir: pathlib.Path) -> dict | None:
-    """Call claude-sonnet-5-5 with the curation prompt.
+def _call_path_a(
+    scrubbed_text: str, prompts_dir: pathlib.Path, note: str = ""
+) -> dict | None:
+    """Call claude-sonnet-5-5 with the curation prompt (plus *note*, if any).
 
     Returns the artifact dict with usage keys (tokens_in/tokens_out/cost_usd)
     merged in. A model null returns the usage dict plus {"_null": True} so the
@@ -766,7 +769,7 @@ def _call_path_a(scrubbed_text: str, prompts_dir: pathlib.Path) -> dict | None:
             "CAPTURE_MOCK_SDK=1 but no mock injected — call monkeypatched version"
         )
 
-    system_prompt = (prompts_dir / "curation-system-prompt.md").read_text()
+    system_prompt = (prompts_dir / "curation-system-prompt.md").read_text() + note
 
     # Summed across attempts; once any attempt's usage is unknown, so is the total.
     tokens_in = tokens_out = 0
@@ -1048,7 +1051,7 @@ def run_capture(
     # A resumed session keeps its id: curate only what it added since the last capture.
     prior = last_capture(session_id, index_path=index_path)
     end = max((m.get("end", 0) for m in transcript), default=0)
-    part, head, prior_stem = transcript, "", None
+    part, note, prior_stem = transcript, "", None
     if prior is not None:
         prior_end, prior_note = prior
         # Rows from before schema 3 have no offset: treat them as fully captured.
@@ -1058,7 +1061,7 @@ def run_capture(
             else [m for m in transcript if m.get("end", 0) > prior_end]
         )
         prior_stem = pathlib.PurePosixPath(prior_note).stem if prior_note else None
-        head = _CONTINUATION_HEAD.format(
+        note = _CONTINUATION_NOTE.format(
             earlier=f' into the note "{prior_stem}"'
             if prior_stem
             else ", with no artifact"
@@ -1094,7 +1097,7 @@ def run_capture(
     skip_reason_a: str | None = None
 
     try:
-        result_a = _call_path_a(head + scrubbed_text, prompts_dir)
+        result_a = _call_path_a(scrubbed_text, prompts_dir, note=note)
         usage = result_a or {}
         if result_a is None or result_a.get("_null"):
             skip_reason_a = "model_returned_null"
