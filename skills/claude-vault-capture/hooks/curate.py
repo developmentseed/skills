@@ -24,6 +24,7 @@ import fcntl
 import datetime
 import unicodedata
 import subprocess
+import zlib
 
 # ── constants ──────────────────────────────────────────────────────────────────
 
@@ -1131,19 +1132,27 @@ def main():
         except Exception as log_exc:
             _log_error(f"Failed to log {reason}: {log_exc}")
 
-    try:
-        transcript = _load_transcript(transcript_path)
-    except Exception as exc:
-        _log_error(f"Failed to load transcript {transcript_path!r}: {exc}")
-        _log_best_effort("transcript_missing")
-        sys.exit(0)
+    lock_dir = INDEX_PATH.parent / "locks"
+    lock_dir.mkdir(parents=True, exist_ok=True)
+    # Two SessionEnds for one id (two terminals, a quick re-exit) must not both curate
+    # the same part: the second waits, then sees the first's index row. 64 buckets
+    # bound the file count; sessions sharing one only wait for each other.
+    bucket = f"{zlib.crc32(session_id.encode()) % 64:02d}.lock"
+    with open(lock_dir / bucket, "a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        try:
+            transcript = _load_transcript(transcript_path)
+        except Exception as exc:
+            _log_error(f"Failed to load transcript {transcript_path!r}: {exc}")
+            _log_best_effort("transcript_missing")
+            sys.exit(0)
 
-    try:
-        run_capture(transcript=transcript, session_id=session_id, cwd=cwd)
-    except Exception as exc:
-        _log_error(f"CURATE_ERROR session={session_id}: {exc}")
-        _log_best_effort(f"error:{type(exc).__name__}")
-        sys.exit(0)
+        try:
+            run_capture(transcript=transcript, session_id=session_id, cwd=cwd)
+        except Exception as exc:
+            _log_error(f"CURATE_ERROR session={session_id}: {exc}")
+            _log_best_effort(f"error:{type(exc).__name__}")
+            sys.exit(0)
 
 
 def _log_error(msg: str) -> None:

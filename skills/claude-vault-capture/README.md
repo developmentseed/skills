@@ -37,7 +37,7 @@ With no credential the plugin looks installed and its hook fires, but every capt
 
 The `SessionEnd` hook is registered automatically and the `/vault-save` skill becomes available. Sensitive values (API key, OAuth token) are stored in your OS keychain (macOS Keychain; the platform-appropriate secret store elsewhere).
 
-Runtime state (a dedup index and a per-session log) is kept in the plugin's persistent data directory (`${CLAUDE_PLUGIN_DATA}`), which survives plugin updates.
+Runtime state (a dedup index, a per-session log, and `state/locks/` with at most 64 empty lock files) is kept in the plugin's persistent data directory (`${CLAUDE_PLUGIN_DATA}`), which survives plugin updates.
 
 ## Verify it's working
 
